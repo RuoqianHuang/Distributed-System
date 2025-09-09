@@ -15,16 +15,16 @@ type Query struct {
 }
 
 var hosts = []string{
-	"node0",
-	"node1",
-	"node2",
-	"node3",
-	"node4",
-	"node5",
-	"node6",
-	"node7",
-	"node8",
-	"node9",
+	"fa25-cs425-b601.cs.illinois.edu",
+	"fa25-cs425-b602.cs.illinois.edu",
+	"fa25-cs425-b603.cs.illinois.edu",
+	"fa25-cs425-b604.cs.illinois.edu",
+	"fa25-cs425-b605.cs.illinois.edu",
+	"fa25-cs425-b606.cs.illinois.edu",
+	"fa25-cs425-b607.cs.illinois.edu",
+	"fa25-cs425-b608.cs.illinois.edu",
+	"fa25-cs425-b609.cs.illinois.edu",
+	"fa25-cs425-b610.cs.illinois.edu",
 }
 
 const (
