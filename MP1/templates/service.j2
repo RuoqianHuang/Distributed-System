@@ -1,0 +1,13 @@
+[Unit]
+Description={{ service_name }} - Go Application
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/{{ service_name }}
+User={{ remote_user }}
+Group={{ remote_user }}
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
