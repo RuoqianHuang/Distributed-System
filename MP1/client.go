@@ -10,8 +10,7 @@ import (
 )
 
 type Query struct {
-	Filename string
-	Args     []string
+	Args []string
 }
 
 var hosts = []string{
@@ -75,26 +74,40 @@ func asyncCallWithTimeout(
 func main() {
 	fmt.Println(len(os.Args), os.Args)
 	if len(os.Args) < 2 {
-		fmt.Println("Please specify a filename")
+		fmt.Println("Usage: go run client.go <grep-args>")
+		fmt.Println("Example: go run client.go -e 'error'")
+		fmt.Println("Example: go run client.go -i 'warning'")
+		os.Exit(1)
 	}
 
-	// create query
+	// create query - server will determine filename from hostname
 	query := Query{
-		Filename: os.Args[1],
-		Args:     os.Args[2:],
+		Args: os.Args[1:], // All args are grep options
 	}
 
 	waitGroup := new(sync.WaitGroup)
 	results := make([][]string, len(hosts))
 	for i, hostname := range hosts {
+		// Server will determine filename from its own hostname
 		asyncCallWithTimeout(hostname, waitGroup, query, &results[i])
 	}
 	waitGroup.Wait() // wait every call to complete
 
-	// output results
+	// output results with line counts
+	totalMatches := 0
 	for i, buf := range results {
-		for _, line := range buf {
-			fmt.Printf("[%s]: %s\n", hosts[i], line)
+		if len(buf) > 0 {
+			fmt.Printf("=== %s (%d matches) ===\n", hosts[i], len(buf))
+			for _, line := range buf {
+				fmt.Printf("%s\n", line)
+			}
+			totalMatches += len(buf)
+		} else {
+			fmt.Printf("=== %s (0 matches) ===\n", hosts[i])
 		}
 	}
+
+	// Print summary
+	fmt.Printf("\n=== SUMMARY ===\n")
+	fmt.Printf("Total matches across all machines: %d\n", totalMatches)
 }
