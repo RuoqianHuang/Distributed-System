@@ -171,3 +171,19 @@ your project name). Please include a README explaining how to compile and run
 your code. Default submission is via gitlab sharing – please include your group
 number in your gitlab-shared names! Further submission instructions will be
 posted on Piazza.
+
+
+## How to deploy
+
+### Prerequisite
+1. All remote servers installed with Python and ssh server.
+2. Setup ssh key and passwordless sudo on remote servers.
+3. Install ansible-core
+
+### Steps
+1. Build server binary with ``go build server.go``
+2. Deploy server binary with ``ansible-playbook -i inventory.ini install-playbook.yml``
+3. To uninstall server binary, run ``ansible-playbook -i inventory.ini uninstall-playbook.yml``
+
+### Other commands
+1. ping test: ``ansible -i inventory.ini my_servers -m ping``
