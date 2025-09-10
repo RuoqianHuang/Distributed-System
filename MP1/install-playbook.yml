@@ -4,7 +4,7 @@
   vars:
     service_name: "MP1_server"
     binary_path: "./server"
-    remote_user: "{{ lookup('env', 'USER') }}"/
+    remote_user: "{{ lookup('env', 'USER') }}"
 
   tasks:
     - name: "Copy the server binary to the remote nodes"
