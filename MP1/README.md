@@ -172,6 +172,14 @@ your code. Default submission is via gitlab sharing – please include your grou
 number in your gitlab-shared names! Further submission instructions will be
 posted on Piazza.
 
+## How to build server and client binary
+````
+# Build the client
+go build -o bin/client ./cmd/client
+
+# Build the server
+go build -o bin/server ./cmd/server
+````
 
 ## How to deploy
 
@@ -187,3 +195,10 @@ posted on Piazza.
 
 ### Other commands
 1. ping test: ``ansible -i inventory.ini my_servers -m ping``
+
+
+## How to run tests
+
+````
+go test internal/caller/mp1_test.go -v
+````
