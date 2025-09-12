@@ -5,6 +5,7 @@
     service_name: "MP1_server"
     binary_path: "./bin/server"
     remote_user: "{{ lookup('env', 'USER') }}"
+    test_mode: "{{ test_mode | default('0') }}"
 
   tasks:
     - name: "Copy the server binary to the remote nodes"

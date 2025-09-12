@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -65,7 +66,21 @@ func (g *Grep) Grep(query Query, result *[]string) error {
 	// Get hostname and extract machine number
 	hostname := getHostName()
 	machineNumber := getMachineNumber(hostname)
-	filename := fmt.Sprintf("/cs425/machine.%s.log", machineNumber)
+	
+	// Determine log file path based on environment variable
+	var filename string
+	if os.Getenv("TEST_MODE") == "1" {
+		// Test mode: use /cs425/machine.XX.log
+		filename = fmt.Sprintf("/cs425/machine.%s.log", machineNumber)
+	} else {
+		// Normal mode: use vmX.log in current directory
+		// Convert "01" -> 1, "02" -> 2, etc.
+		if i, err := strconv.Atoi(machineNumber); err == nil {
+			filename = fmt.Sprintf("vm%d.log", i)
+		} else {
+			filename = "vm1.log" // fallback
+		}
+	}
 
 	log.Printf("Received query with args %v, using filename %s (hostname: %s)\n", query.Args, filename, hostname)
 

@@ -190,8 +190,11 @@ go build -o bin/server ./cmd/server
 
 ### Steps
 1. Build server binary with ``go build server.go``
-2. Deploy server binary with ``ansible-playbook -i inventory.ini install-playbook.yml``
-3. To uninstall server binary, run ``ansible-playbook -i inventory.ini uninstall-playbook.yml``
+2. Deploy server binary with ``ansible-playbook -i inventory.ini install-playbook.yml`` (Normal mode: append ``-e test_mode=0``, test mode: append ``-e test_mode=1``)
+3. When switching test mode, kill any foreground processes first: ``ansible -i inventory.ini my_servers -m shell -a "pkill -x server || true"``, then build and restart the services:
+``   ansible -i inventory.ini my_servers -b -m systemd -a "name=MP1_server state=restarted"``
+4. Run client: ``go run cmd/client/main.go`` (with any desired pattern)
+5. To uninstall server binary, run ``ansible-playbook -i inventory.ini uninstall-playbook.yml``
 
 ### Other commands
 1. ping test: ``ansible -i inventory.ini my_servers -m ping``
