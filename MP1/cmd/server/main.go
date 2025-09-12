@@ -14,8 +14,7 @@ import (
 )
 
 type Query struct {
-	Filename string
-	Args     []string
+	Args []string
 }
 
 const (
