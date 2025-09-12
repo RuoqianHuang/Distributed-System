@@ -3,10 +3,11 @@ package utils
 import (
 	"os"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+	"bytes"
 	"bufio"
+	"errors"
 	"strings"
 	"os/exec"
 	"math/rand"
@@ -59,38 +60,90 @@ func GetMachineNumber(hostname string) string {
 	return "01" // Default fallback
 }
 
-func GenerateRandomdLogFile(lines int, length int, filename string) {
+func GenerateRandomdLogFile(lines int, length int, filename string) error {
 	file, err := os.Create(filename)
 	if err != nil {
-		log.Printf("Failed to create file %s: %s\n", filename, err.Error())
-		return
+		return err
 	}
+
 	defer file.Close()
 
 	writer := bufio.NewWriter(file)
+	
 	for i := range lines {
-		_, err := writer.WriteString(RandStringRunes(length))
+		_, err := writer.WriteString(RandStringRunes(length) + "\n")
 		if err != nil {
-			log.Printf("Failed to write line %d to file %s: %s\n", i, file, err.Error())
-			return
+			return errors.New(fmt.Sprintf("Fail to write file to %s at line %d. Error: %s\n", filename, i + 1, err.Error()))
 		}
 	}
 	writer.Flush()
+	return nil
 }
 
-
-func SendFile(hostname string, desPath string, srcPath string, waitGroup *sync.WaitGroup) {
+func SendFile(hostname string, desPath string, srcPath string, waitGroup *sync.WaitGroup, chanError chan<- error) {
 	defer waitGroup.Done()
 
 	remotePath := fmt.Sprintf("%s:%s", hostname, desPath)
-	log.Printf("Sending '%s' to %s...\n", srcPath, hostname)
 	cmd := exec.Command("scp", srcPath, remotePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Failed to send to %s. Error: %s, Output: %s\n", hostname, err.Error(), string(output))
-		return
+		chanError <- errors.New(fmt.Sprintf("Fail to send file to %s. Error: %s. Output: %s\n", hostname, err.Error(), output))
+	} else {
+		chanError <- nil
 	}
-
-	log.Printf("File %s sent to %s\n", srcPath, hostname)
 }
 
+func GrepFile(filename string, result *[]string, query Query) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Fail to open file %s. Error: %s\n", filename, err.Error()))
+	}
+	defer file.Close()
+
+	// create grep command to run and pipe the file to it
+	Args := []string{"--color=always"}
+	Args = append(Args, query.Args...)
+	exe := exec.Command("grep", Args...)
+	exe.Stdin = file
+
+	// run the grep command and receive result with buffer
+	var stdout_buf, stderr_buf bytes.Buffer
+	exe.Stdout = &stdout_buf
+	exe.Stderr = &stderr_buf
+	err = exe.Run()
+
+	// Check if grep found no matches (exit code 1) vs actual error
+	if err != nil {
+		// grep returns exit code 1 when no matches found (not an error)
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
+			// No matches found - this is normal, not an error
+			*result = []string{}
+			return nil
+		}
+		// Actual error occurred
+		return errors.New(fmt.Sprintf("grep Command failed: %v: %s\n", err, stderr_buf.String()))
+	}
+
+	// process output and return
+	output := strings.TrimSpace(stdout_buf.String())
+	if len(output) == 0 {
+		*result = []string{}
+		return nil
+	}
+
+	lines := strings.Split(output, "\n")
+	// Add filename prefix to each line (like standard grep)
+	for i, line := range lines {
+		lines[i] = fmt.Sprintf("%s:%s", filename, line)
+	}
+
+	*result = lines
+	return nil
+}
+
+	
+	
+
+	
+
+	

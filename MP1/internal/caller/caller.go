@@ -6,6 +6,7 @@ import (
 	"net/rpc"
 	"sync"
 	"time"
+	"errors"
 	"cs425/mp1/internal/utils"
 )
 
@@ -34,67 +35,58 @@ func asyncCallWithTimeout(
 	waitGroup *sync.WaitGroup,
 	query utils.Query,
 	result *[]string,
-) error {
-	waitGroup.Add(1)
+	chanError chan<- error) {
+	
+	// use wait group to wait all async calls
+	defer waitGroup.Done()
+
+	// create timeout dial
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, SERVER_PORT), CONNECTION_TIMEOUT)
+	if err != nil {
+		chanError <- errors.New(fmt.Sprintf("Fail to dial server %s: %s\n", hostname, err.Error()))
+		return // exit goroutine when connection fails
+	}
+	defer conn.Close()
+
+	client := rpc.NewClient(conn)
+	callChan := make(chan error, 1)
+
 	go func() {
-		// use wait group to wait all async calls
-		defer waitGroup.Done()
+		// make blocking call on remote function
+		callChan <- client.Call("Grep.Grep", query, result)
+	}()
 
-		// create timeout dial
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, SERVER_PORT), CONNECTION_TIMEOUT)
-		if err != nil {
-			fmt.Printf("Fail to dial server %s: %s\n", hostname, err.Error())
-			return // exit goroutine when connection fails
-		}
-		defer conn.Close()
-
-		client := rpc.NewClient(conn)
-		callChan := make(chan error, 1)
-
-		go func() {
-			// make blocking call on remote function
-			callChan <- client.Call("Grep.Grep", query, result)
-		}()
-
-		select {
+	select {
 		case err := <-callChan:
 			if err != nil {
-				fmt.Printf("RPC call to server %s failed: %s\n", hostname, err.Error())
+				chanError <- errors.New(fmt.Sprintf("RPC call to server %s failed: %s\n", hostname, err.Error()))				
 			}
 		case <-time.After(CALL_TIMEOUT):
-			fmt.Printf("RPC call to server %s timed out\n", hostname)
-		}
-	}()
-	return nil
+			chanError <- errors.New(fmt.Sprintf("RPC call to server %s timed out\n", hostname))
+	}
 }
 
-func ClientCall(query utils.Query) [][]string {
+func ClientCall(query utils.Query) ([][]string, error) {
 
 	waitGroup := new(sync.WaitGroup)
 	results := make([][]string, len(HOSTS))
+	chanError := make(chan error, len(HOSTS))
+
 	for i, hostname := range HOSTS {
 		// Server will determine filename from its own hostname
-		asyncCallWithTimeout(hostname, waitGroup, query, &results[i])
+		waitGroup.Add(1)
+		go asyncCallWithTimeout(hostname, waitGroup, query, &results[i], chanError)
 	}
 	waitGroup.Wait() // wait every call to complete
 
-	return results
+	close(chanError)
 
-	// output results with line counts
-	// totalMatches := 0
-	// for i, buf := range results {
-	// 	if len(buf) > 0 {
-	// 		fmt.Printf("=== %s (%d matches) ===\n", hosts[i], len(buf))
-	// 		for _, line := range buf {
-	// 			fmt.Printf("%s\n", line)
-	// 		}
-	// 		totalMatches += len(buf)
-	// 	} else {
-	// 		fmt.Printf("=== %s (0 matches) ===\n", hosts[i])
-	// 	}
-	// }
+	for err := range chanError {
+		if err != nil {
+			// return first error
+			return nil, err
+		}
+	}
 
-	// // Print summary
-	// fmt.Printf("\n=== SUMMARY ===\n")
-	// fmt.Printf("Total matches across all machines: %d\n", totalMatches)
+	return results, nil
 }
