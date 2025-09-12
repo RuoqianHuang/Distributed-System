@@ -3,7 +3,7 @@
   become: yes
   vars:
     service_name: "MP1_server"
-    binary_path: "./server"
+    binary_path: "./bin/server"
     remote_user: "{{ lookup('env', 'USER') }}"
 
   tasks:
