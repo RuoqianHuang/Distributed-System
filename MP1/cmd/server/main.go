@@ -65,7 +65,7 @@ func (g *Grep) Grep(query Query, result *[]string) error {
 	// Get hostname and extract machine number
 	hostname := getHostName()
 	machineNumber := getMachineNumber(hostname)
-	filename := fmt.Sprintf("machine.%s.log", machineNumber)
+	filename := fmt.Sprintf("/cs425/machine.%s.log", machineNumber)
 
 	log.Printf("Received query with args %v, using filename %s (hostname: %s)\n", query.Args, filename, hostname)
 
