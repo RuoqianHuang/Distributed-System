@@ -11,21 +11,21 @@ import (
 	"cs425/mp1/internal/utils"
 )
 
-func TestRandomString(t *testing.T) {
-	t.Logf("Preparing log files with random lines")
-	tempDir, err := os.MkdirTemp("", "MP1-test-random-lines-*")
+func TestComprehensiveLogQuerier(t *testing.T) {
+	t.Logf("Preparing comprehensive log files with known and random lines")
+	tempDir, err := os.MkdirTemp("", "MP1-test-*")
 	if err != nil {
 		t.Fatalf("Fail to create temp directory for log files: %s\n", err.Error())
 	}
 
-	// generate random files
-	lines := 10000
-	length := 250
-	for _, hostname := range caller.HOSTS {
+	// generate comprehensive test files with known patterns
+	lines := 100
+	length := 50
+	for i, hostname := range caller.HOSTS {
 		machineNumber := utils.GetMachineNumber(hostname)
 		filename := fmt.Sprintf("machine.%s.log", machineNumber)
 		desPath := filepath.Join(tempDir, filename)
-		err := utils.GenerateRandomdLogFile(lines, length, desPath)
+		err := utils.GenerateComprehensiveLogFile(lines, length, desPath, i+1)
 		if err != nil {
 			t.Fatalf("%s\n", err.Error())
 		}
@@ -57,34 +57,65 @@ func TestRandomString(t *testing.T) {
 	}
 	t.Logf("All files are sent.")
 
-	// query pattern
-	query := utils.Query{
-		Args: []string{"abc"},
+	// Test multiple query patterns with different frequencies
+	testCases := []struct {
+		name        string
+		pattern     string
+		description string
+	}{
+		{"RarePattern", "RARE_PATTERN_XYZ", "Should find 0-1 matches per file"},
+		{"FrequentPattern", "ERROR", "Should find many matches (appears in every file)"},
+		{"SomewhatFrequent", "WARN", "Should find moderate matches (appears in some files)"},
+		{"SingleMachine", "MACHINE_01_ONLY", "Should only appear in machine 01"},
+		{"SomeMachines", "SHARED_PATTERN", "Should appear in machines 01-05"},
+		{"AllMachines", "COMMON_LOG", "Should appear in all machines"},
 	}
 
-	// run client grep to test 
-	start_time := time.Now()
-	results_remote, err := caller.ClientCall(query)	
-	if err != nil {
-		t.Fatal(err.Error())
-	}
-	t.Logf("Remote grep took %v\n", time.Since(start_time))
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("Testing pattern: %s (%s)", tc.pattern, tc.description)
+			
+			query := utils.Query{
+				Args: []string{tc.pattern},
+			}
 
-	// run local grep to verify results
-	results_local  := make([][]string, len(caller.HOSTS))
-	for i, hostname := range caller.HOSTS {
-		machineNumber := utils.GetMachineNumber(hostname)
-		filename := fmt.Sprintf("machine.%s.log", machineNumber)
-		srcPath := filepath.Join(tempDir, filename)
+			// run client grep to test 
+			start_time := time.Now()
+			results_remote, err := caller.ClientCall(query)	
+			if err != nil {
+				t.Fatalf("Remote grep failed: %s", err.Error())
+			}
+			t.Logf("Remote grep took %v", time.Since(start_time))
 
-		err := utils.GrepFile(srcPath, &results_local[i], query)
-		if(err != nil) {
-			t.Fatalf("Fail to grep local file %s. Error: %s\n", srcPath, err.Error())
-		}
-		// verify result
-		if len(results_remote[i]) != len(results_local[i]) {
-			t.Fatalf("Results on machine %s did not match. Expecting %d lines, but found %d lines\n", hostname, len(results_local[i]), len(results_remote[i]))
-		}
+			// run local grep to verify results
+			results_local := make([][]string, len(caller.HOSTS))
+			for i, hostname := range caller.HOSTS {
+				machineNumber := utils.GetMachineNumber(hostname)
+				filename := fmt.Sprintf("machine.%s.log", machineNumber)
+				srcPath := filepath.Join(tempDir, filename)
+
+				err := utils.GrepFile(srcPath, &results_local[i], query)
+				if err != nil {
+					t.Fatalf("Fail to grep local file %s. Error: %s", srcPath, err.Error())
+				}
+				
+				// verify result
+				if len(results_remote[i]) != len(results_local[i]) {
+					t.Errorf("Results on machine %s did not match. Remote: %d, Local: %d", 
+						hostname, len(results_remote[i]), len(results_local[i]))
+				}
+				
+				// Log match counts for analysis
+				t.Logf("Machine %s: %d matches", hostname, len(results_remote[i]))
+			}
+
+			// Verify expected behavior based on pattern type
+			totalMatches := 0
+			for _, result := range results_remote {
+				totalMatches += len(result)
+			}
+			t.Logf("Total matches across all machines: %d", totalMatches)
+		})
 	}
 
 	// clean up

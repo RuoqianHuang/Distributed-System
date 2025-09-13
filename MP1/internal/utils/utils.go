@@ -80,6 +80,66 @@ func GenerateRandomdLogFile(lines int, length int, filename string) error {
 	return nil
 }
 
+func GenerateComprehensiveLogFile(lines int, length int, filename string, machineNum int) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	
+	// Add known patterns with specific distributions
+	knownLines := []string{
+		"2025-09-12 10:30:15 INFO: System started - COMMON_LOG",
+		"2025-09-12 10:31:22 ERROR: Database connection failed - ERROR",
+		"2025-09-12 10:32:15 WARN: High memory usage detected - WARN",
+		"2025-09-12 10:33:45 INFO: User login successful - COMMON_LOG",
+		"2025-09-12 10:34:12 ERROR: Timeout occurred - ERROR",
+		"2025-09-12 10:35:30 INFO: Process completed - COMMON_LOG",
+		"2025-09-12 11:00:00 ERROR: Network connection lost - ERROR",
+		"2025-09-12 11:15:30 INFO: Service restarted - COMMON_LOG",
+		"2025-09-12 11:30:45 WARN: Disk space low - WARN",
+		"2025-09-12 11:45:20 ERROR: Authentication failed - ERROR",
+	}
+	
+	// Add machine-specific patterns
+	if machineNum == 1 {
+		knownLines = append(knownLines, "2025-09-12 12:00:00 SPECIAL: MACHINE_01_ONLY - This is unique to machine 1")
+	}
+	
+	// Add patterns for machines 1-5
+	if machineNum >= 1 && machineNum <= 5 {
+		knownLines = append(knownLines, "2025-09-12 12:30:00 SHARED: SHARED_PATTERN - This appears in machines 1-5")
+	}
+	
+	// Add a rare pattern (only in one random file)
+	if machineNum == 3 {
+		knownLines = append(knownLines, "2025-09-12 13:00:00 RARE: RARE_PATTERN_XYZ - This is very rare")
+	}
+	
+	// Write known lines first
+	for _, line := range knownLines {
+		_, err := writer.WriteString(line + "\n")
+		if err != nil {
+			return errors.New(fmt.Sprintf("Fail to write known line to %s. Error: %s", filename, err.Error()))
+		}
+	}
+	
+	// Fill remaining lines with random content
+	remainingLines := lines - len(knownLines)
+	for i := 0; i < remainingLines; i++ {
+		_, err := writer.WriteString(RandStringRunes(length) + "\n")
+		if err != nil {
+			return errors.New(fmt.Sprintf("Fail to write random line to %s at line %d. Error: %s", filename, i + 1, err.Error()))
+		}
+	}
+	
+	writer.Flush()
+	return nil
+}
+
 func SendFile(hostname string, desPath string, srcPath string, waitGroup *sync.WaitGroup, chanError chan<- error) {
 	defer waitGroup.Done()
 
