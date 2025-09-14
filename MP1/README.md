@@ -198,6 +198,7 @@ go build -o bin/server ./cmd/server
 
 ### Other commands
 1. ping test: ``ansible -i inventory.ini my_servers -m ping``
+2. server log: ``journalctl -u MP1_server.service -n 50``
 
 
 ## How to run tests
