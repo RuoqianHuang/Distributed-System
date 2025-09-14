@@ -43,7 +43,7 @@ func asyncCallWithTimeout(
 	// create timeout dial
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, SERVER_PORT), CONNECTION_TIMEOUT)
 	if err != nil {
-		chanError <- errors.New(fmt.Sprintf("Fail to dial server %s: %s\n", hostname, err.Error()))
+		chanError <- errors.New(fmt.Sprintf("Fail to dial server %s: %s", hostname, err.Error()))
 		return // exit goroutine when connection fails
 	}
 	defer conn.Close()
@@ -59,14 +59,14 @@ func asyncCallWithTimeout(
 	select {
 		case err := <-callChan:
 			if err != nil {
-				chanError <- errors.New(fmt.Sprintf("RPC call to server %s failed: %s\n", hostname, err.Error()))				
+				chanError <- errors.New(fmt.Sprintf("RPC call to server %s failed: %s", hostname, err.Error()))				
 			}
 		case <-time.After(CALL_TIMEOUT):
-			chanError <- errors.New(fmt.Sprintf("RPC call to server %s timed out\n", hostname))
+			chanError <- errors.New(fmt.Sprintf("RPC call to server %s timed out", hostname))
 	}
 }
 
-func ClientCall(query utils.Query) ([][]string, error) {
+func ClientCall(query utils.Query) ([][]string, []error) {
 
 	waitGroup := new(sync.WaitGroup)
 	results := make([][]string, len(HOSTS))
@@ -81,12 +81,12 @@ func ClientCall(query utils.Query) ([][]string, error) {
 
 	close(chanError)
 
+	errs := make([]error, 0)
 	for err := range chanError {
 		if err != nil {
-			// return first error
-			return nil, err
+			errs = append(errs, err)
 		}
 	}
 
-	return results, nil
+	return results, errs
 }

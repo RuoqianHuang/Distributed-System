@@ -73,7 +73,7 @@ func GenerateRandomdLogFile(lines int, length int, filename string) error {
 	for i := range lines {
 		_, err := writer.WriteString(RandStringRunes(length) + "\n")
 		if err != nil {
-			return errors.New(fmt.Sprintf("Fail to write file to %s at line %d. Error: %s\n", filename, i + 1, err.Error()))
+			return errors.New(fmt.Sprintf("Fail to write file to %s at line %d. Error: %s", filename, i + 1, err.Error()))
 		}
 	}
 	writer.Flush()
@@ -147,7 +147,7 @@ func SendFile(hostname string, desPath string, srcPath string, waitGroup *sync.W
 	cmd := exec.Command("scp", srcPath, remotePath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		chanError <- errors.New(fmt.Sprintf("Fail to send file to %s. Error: %s. Output: %s\n", hostname, err.Error(), output))
+		chanError <- errors.New(fmt.Sprintf("Fail to send file to %s. Error: %s. Output: %s", hostname, err.Error(), output))
 	} else {
 		chanError <- nil
 	}
@@ -156,7 +156,7 @@ func SendFile(hostname string, desPath string, srcPath string, waitGroup *sync.W
 func GrepFile(filename string, result *[]string, query Query) error {
 	file, err := os.Open(filename)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Fail to open file %s. Error: %s\n", filename, err.Error()))
+		return errors.New(fmt.Sprintf("Fail to open file %s. Error: %s", filename, err.Error()))
 	}
 	defer file.Close()
 
@@ -181,7 +181,7 @@ func GrepFile(filename string, result *[]string, query Query) error {
 			return nil
 		}
 		// Actual error occurred
-		return errors.New(fmt.Sprintf("grep Command failed: %v: %s\n", err, stderr_buf.String()))
+		return errors.New(fmt.Sprintf("grep Command failed: %v: %s", err, stderr_buf.String()))
 	}
 
 	// process output and return
