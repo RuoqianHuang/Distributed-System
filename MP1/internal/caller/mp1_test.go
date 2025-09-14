@@ -39,7 +39,7 @@ func TestComprehensiveLogQuerier(t *testing.T) {
 		machineNumber := utils.GetMachineNumber(hostname)
 		filename := fmt.Sprintf("machine.%s.log", machineNumber)
 		
-		desPath := fmt.Sprintf("/cs425/%s", filename)
+		desPath := fmt.Sprintf("/cs425/mp1/%s", filename)
 		srcPath := filepath.Join(tempDir, filename)
 		t.Logf("Sending '%s' to %s...\n", srcPath, hostname)
 
@@ -81,9 +81,11 @@ func TestComprehensiveLogQuerier(t *testing.T) {
 
 			// run client grep to test 
 			start_time := time.Now()
-			results_remote, err := caller.ClientCall(query)	
-			if err != nil {
-				t.Fatalf("Remote grep failed: %s", err.Error())
+			results_remote, errs := caller.ClientCall(query)	
+			for _, err := range errs {
+				if err != nil {
+					t.Fatalf("Remote grep failed: %s", err.Error())
+				}
 			}
 			t.Logf("Remote grep took %v", time.Since(start_time))
 
