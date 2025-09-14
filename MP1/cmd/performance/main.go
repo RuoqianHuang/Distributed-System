@@ -19,8 +19,8 @@ type PerformanceResult struct {
 // Query only 4 machines (first 4 VMs) for performance testing
 func queryFourMachines(query utils.Query) ([][]string, error) {
 	// Call all machines but only use results from first 4
-	allResults, err := caller.ClientCall(query)
-	if err != nil {
+	allResults, errs := caller.ClientCall(query)
+	for _, err := range errs {
 		return nil, err
 	}
 	
