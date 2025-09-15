@@ -1,14 +1,15 @@
 package main
 
 import (
+	"os"
 	"fmt"
 	"log"
 	"net"
+	"errors"
 	"net/rpc"
-	"os"
-	"os/signal"
-	"strconv"
 	"syscall"
+	"os/signal"
+	"path/filepath"
 	"cs425/mp1/internal/utils"
 	"cs425/mp1/internal/caller"
 )
@@ -28,30 +29,34 @@ type Grep struct{}
 func (g *Grep) Grep(query utils.Query, result *[]string) error {
 	// Get hostname and extract machine number
 	hostname := getHostName()
-	machineNumber := utils.GetMachineNumber(hostname)
+
+	log.Printf("Received query with args %v, using filename %s (hostname: %s)\n", query.Args, query.Filename, hostname)
 	
-	// Determine log file path based on environment variable
-	var filename string
-	if os.Getenv("TEST_MODE") == "1" {
-		// Test mode: use machine.XX.log
-		filename = fmt.Sprintf("machine.%s.log", machineNumber)
-	} else {
-		// Normal mode: use vmX.log in current directory
-		// Convert "01" -> 1, "02" -> 2, etc.
-		if i, err := strconv.Atoi(machineNumber); err == nil {
-			filename = fmt.Sprintf("vm%d.log", i)
+	// Grep all files that match the regular expression
+	matchingFiles, err := filepath.Glob(query.Filename)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Invalid filename pattern: %s", err.Error()))
+	}
+	log.Printf("Found %d matching files\n", len(matchingFiles))
+
+	// No matching files
+	if len(matchingFiles) == 0 {
+		*result = []string{};
+		return nil
+	}
+
+	lines := []string{}
+	for _, filename := range matchingFiles {
+		log.Printf("Grep file %s\n", filename)
+		partialResult := []string{}
+		err := utils.GrepFile(filename, query.Args, &partialResult)
+		if err != nil {
+			log.Printf("%s\n", err.Error())
 		} else {
-			filename = "vm1.log" // fallback
+			lines = append(lines, partialResult...)
 		}
 	}
-
-	log.Printf("Received query with args %v, using filename %s (hostname: %s)\n", query.Args, filename, hostname)
-
-	err := utils.GrepFile(filename, result, query)
-	if err != nil {
-		log.Printf("%s\n", err.Error());
-		return err
-	}
+	*result = lines
 	return nil	
 }
 

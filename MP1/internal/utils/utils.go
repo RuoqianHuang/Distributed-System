@@ -15,6 +15,7 @@ import (
 
 // Query type for client to send and server to receive
 type Query struct {
+	Filename string
 	Args []string
 }
 
@@ -153,7 +154,7 @@ func SendFile(hostname string, desPath string, srcPath string, waitGroup *sync.W
 	}
 }
 
-func GrepFile(filename string, result *[]string, query Query) error {
+func GrepFile(filename string, args []string, result *[]string) error {
 	file, err := os.Open(filename)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Fail to open file %s. Error: %s", filename, err.Error()))
@@ -161,17 +162,19 @@ func GrepFile(filename string, result *[]string, query Query) error {
 	defer file.Close()
 
 	// create grep command to run and pipe the file to it
-	Args := []string{"--color=always"}
-	Args = append(Args, query.Args...)
-	exe := exec.Command("grep", Args...)
+	localArgs := make([]string, 0, len(args) + 1)
+	localArgs = append(localArgs, "--color=always")
+	localArgs = append(localArgs, args...)
+
+	exe := exec.Command("grep", localArgs...)
 	exe.Stdin = file
 
 	// run the grep command and receive result with buffer
-	var stdout_buf, stderr_buf bytes.Buffer
-	exe.Stdout = &stdout_buf
-	exe.Stderr = &stderr_buf
+	var stdoutBuf, stderrBuf bytes.Buffer
+	exe.Stdout = &stdoutBuf
+	exe.Stderr = &stderrBuf
 	err = exe.Run()
-
+	
 	// Check if grep found no matches (exit code 1) vs actual error
 	if err != nil {
 		// grep returns exit code 1 when no matches found (not an error)
@@ -181,11 +184,11 @@ func GrepFile(filename string, result *[]string, query Query) error {
 			return nil
 		}
 		// Actual error occurred
-		return errors.New(fmt.Sprintf("grep Command failed: %v: %s", err, stderr_buf.String()))
+		return errors.New(fmt.Sprintf("grep Command failed: %v: %s", err, stderrBuf.String()))
 	}
 
 	// process output and return
-	output := strings.TrimSpace(stdout_buf.String())
+	output := strings.TrimSpace(stdoutBuf.String())
 	if len(output) == 0 {
 		*result = []string{}
 		return nil

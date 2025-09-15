@@ -18,6 +18,7 @@ func main() {
 
 	// create query - server will determine filename from hostname
 	query := utils.Query{
+		Filename: "vm*.log", // Default filename regular expression 
 		Args: os.Args[1:], // All args are grep options
 	}
 
