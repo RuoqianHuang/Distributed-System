@@ -190,16 +190,29 @@ go build -o bin/server ./cmd/server
 
 ### Steps
 1. Build server binary with ``go build server.go``
-2. Deploy server binary with ``ansible-playbook -i inventory.ini install-playbook.yml`` (Normal mode: append ``-e test_mode=0``, test mode: append ``-e test_mode=1``)
-3. When switching test mode, kill any foreground processes first: ``ansible -i inventory.ini my_servers -m shell -a "pkill -x server || true"``, then build and restart the services:
-``   ansible -i inventory.ini my_servers -b -m systemd -a "name=MP1_server state=restarted"``
-4. Run client: ``go run cmd/client/main.go`` (with any desired pattern)
-5. To uninstall server binary, run ``ansible-playbook -i inventory.ini uninstall-playbook.yml``
+2. Deploy server binary with ``ansible-playbook -i inventory.ini install-playbook.yml``
+3. Run client: ``go run cmd/client/main.go`` (with any desired pattern)
+4. To uninstall server binary, run ``ansible-playbook -i inventory.ini uninstall-playbook.yml``
 
 ### Other commands
 1. ping test: ``ansible -i inventory.ini my_servers -m ping``
 2. server log: ``journalctl -u MP1_server.service -n 50``
 
+## Client usage
+
+````
+./bin/client [-f <file_pattern>] [grep_options] <grep_pattern>
+````
+- ``-f <file_pattern>`` (Optional)
+    - Specifies the glob pattern for the log files to search.
+    - **Default**: If this flag is not set, the client defaults to search ``/cs425/mp1/vm*.log``.
+
+- ``[grep_options]`` (Optional)
+    - All standard ``grep`` flag are supported and are passed directly to the grep command.
+
+- ``<grep_pattern>`` (Required)
+    - The pattern to search for within the specified files.
+    
 
 ## How to run tests
 
