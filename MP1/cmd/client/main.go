@@ -16,10 +16,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	filePath := "vm*.log" // Default grep path
+	args := os.Args[1:]
+	var grepArgs []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-f":
+			if i + 1 >= len(args) {
+				fmt.Println("Error: -f flag requires a filename argument.")
+			}
+			filePath = args[i + 1]
+			i++
+
+		default:
+			// Any other argument is collected for grep.
+			grepArgs = append(grepArgs, args[i])
+		}
+	}
+
+	if len(grepArgs) == 0 {
+		fmt.Println("Error: requires a pattern for grep.")
+		os.Exit(1)
+	}
+	fmt.Printf("Grep with filename: %s\n", filePath)
+
 	// create query - server will determine filename from hostname
 	query := utils.Query{
-		Filename: "vm*.log", // Default filename regular expression 
-		Args: os.Args[1:], // All args are grep options
+		Filename: filePath, // Default filename regular expression 
+		Args: grepArgs,
 	}
 
 	results, errs := caller.ClientCall(query)
