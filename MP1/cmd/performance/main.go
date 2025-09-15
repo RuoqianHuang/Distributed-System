@@ -69,6 +69,7 @@ func runPerformanceTest(testName, pattern string, isRegex bool) PerformanceResul
 	
 	// Prepare query
 	var query utils.Query
+	query.Filename = "vm*.log"
 	if isRegex {
 		query = utils.Query{
 			Args: []string{"-E", pattern},
