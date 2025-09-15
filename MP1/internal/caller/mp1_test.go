@@ -60,22 +60,24 @@ func TestComprehensiveLogQuerier(t *testing.T) {
 	// Test multiple query patterns with different frequencies
 	testCases := []struct {
 		name        string
+		filename    string
 		pattern     string
 		description string
 	}{
-		{"RarePattern", "RARE_PATTERN_XYZ", "Should find 0-1 matches per file"},
-		{"FrequentPattern", "ERROR", "Should find many matches (appears in every file)"},
-		{"SomewhatFrequent", "WARN", "Should find moderate matches (appears in some files)"},
-		{"SingleMachine", "MACHINE_01_ONLY", "Should only appear in machine 01"},
-		{"SomeMachines", "SHARED_PATTERN", "Should appear in machines 01-05"},
-		{"AllMachines", "COMMON_LOG", "Should appear in all machines"},
+		{"RarePattern", "machine.*.log", "RARE_PATTERN_XYZ", "Should find 0-1 matches per file"},
+		{"FrequentPattern", "machine.*.log", "ERROR", "Should find many matches (appears in every file)"},
+		{"SomewhatFrequent", "machine.*.log", "WARN", "Should find moderate matches (appears in some files)"},
+		{"SingleMachine", "machine.*.log", "MACHINE_01_ONLY", "Should only appear in machine 01"},
+		{"SomeMachines", "machine.*.log", "SHARED_PATTERN", "Should appear in machines 01-05"},
+		{"AllMachines", "machine.*.log", "COMMON_LOG", "Should appear in all machines"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Logf("Testing pattern: %s (%s)", tc.pattern, tc.description)
+			t.Logf("Testing pattern: %s, filename: %s (%s)", tc.pattern, tc.filename, tc.description)
 			
 			query := utils.Query{
+				Filename: tc.filename,
 				Args: []string{tc.pattern},
 			}
 
@@ -96,7 +98,7 @@ func TestComprehensiveLogQuerier(t *testing.T) {
 				filename := fmt.Sprintf("machine.%s.log", machineNumber)
 				srcPath := filepath.Join(tempDir, filename)
 
-				err := utils.GrepFile(srcPath, &results_local[i], query)
+				err := utils.GrepFile(srcPath, query.Args, &results_local[i])
 				if err != nil {
 					t.Fatalf("Fail to grep local file %s. Error: %s", srcPath, err.Error())
 				}
