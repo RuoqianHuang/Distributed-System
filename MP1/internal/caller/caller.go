@@ -26,8 +26,8 @@ var HOSTS = []string{
 
 const (
 	SERVER_PORT        = 9487
-	CONNECTION_TIMEOUT = 2 * time.Second
-	CALL_TIMEOUT       = 5 * time.Second
+	CONNECTION_TIMEOUT =  2 * time.Second
+	CALL_TIMEOUT       = 10 * time.Second
 )
 
 func asyncCallWithTimeout(
