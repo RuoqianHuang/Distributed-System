@@ -34,7 +34,7 @@ type Info struct {
 }
 
 type Membership struct {
-	lock *sync.RWMutex       // read write mutex
+	lock sync.RWMutex       // read write mutex
 	members map[int64]Info   // member map
 	memberIds []int64        // random permutation of member ids for gossip or pinging
 }
