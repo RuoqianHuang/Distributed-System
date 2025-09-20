@@ -19,7 +19,7 @@ const (
 	Suspected
 )
 
-var stateName = map[ServerState]string{
+var stateName = map[MemberState]string{
 	Alive: "Alive",
 	Failed: "Failed",
 	Suspected: "Suspected",
@@ -128,7 +128,7 @@ func (m *Membership) String() string {
 
 func hashInfo(info Info) int64 {
 	// hash hostname, port, and timestamp to 64 bit integer for map lookup
-	hash := sha256.Sum256([]byte fmt.Sprintf("%s:%d:%s", info.hostname, info.port, info.timestamp.String()))
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", info.hostname, info.port, info.timestamp.String())))
 	return int64(binary.BigEndian.Uint64(hash[:8]))
 }
 
