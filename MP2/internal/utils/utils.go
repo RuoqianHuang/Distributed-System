@@ -25,6 +25,8 @@ var HOSTS = []string{
 	"fa25-cs425-b610.cs.illinois.edu",
 }
 
+const DEFAULT_PORT int = 8787
+
 func GetHostName() (string, error) {
 	name, err := os.Hostname()
 	if err != nil {
@@ -41,6 +43,9 @@ const (
 	Pong
 	PingReq
 	Gossip
+	Probe                      // message for joining
+	ProbeAckGossip
+	ProbeAckSwim
 	UseSwim
 	UseGossip
 )
