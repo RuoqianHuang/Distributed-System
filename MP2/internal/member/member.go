@@ -196,6 +196,8 @@ func RandomPermutation(arr *[]int64)  {
 	n := len(*arr)
 	for i := 0; i < n; i++ {
 		j := rng.Int63() % int64(i + 1)
-		(*arr)[i], (*arr)[j] = (*arr)[j], (*arr)[i] // swap elements
+		if i != j {
+			(*arr)[i], (*arr)[j] = (*arr)[j], (*arr)[i] // swap elements
+		}
 	}
 }
