@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"time"
-	"sync"
 	"errors"
 	"cs425/mp2/internal/utils"
 	"cs425/mp2/internal/member"
@@ -12,44 +11,22 @@ import (
 
 
 type Gossip struct {
-	Tfail time.Duration           // fail detection timeout
-	Tgossip time.Duration         // gossip interval
-	Tsuspect time.Duration        // suspect timeout
-	Tcleanup time.Duration		  // cleanup timeout
-	NextGossip int                // index of next member to gossip to
 	Membership *member.Membership  // membership
-	lock sync.RWMutex            // mutex for nextGossip
 }
 
-func (g *Gossip) NextTarget() (int64, error) {
-	// get next gossip target from member list
-	gossipTarget, err := g.Membership.GetMemberId(g.NextGossip)
-	if err != nil {
-		return 0, errors.New(fmt.Sprintf("Error founding next target: %s", err.Error()))
-	}
-	g.lock.Lock()
-	g.NextGossip++
-	if g.NextGossip == len(g.Membership.Members) { 
-		// finishi this round, random permutation and start next round
-		g.Membership.RandomPermutation()
-		g.NextGossip = 0
-	}
-	g.lock.Unlock()
-	return gossipTarget, nil
-}
-
-func (g *Gossip) HandleRequest(info map[int64]member.Info) {
+func (g *Gossip) HandleRequest(message utils.Message) {
 	// merge incoming membership info
-	anyChanged := g.Membership.Merge(info, time.Now())
+	anyChanged := g.Membership.Merge(message.Info, time.Now())
 	if anyChanged {
 		log.Printf("Membership updated: %s\n", g.Membership.String())
-		g.lock.Lock()
-		g.NextGossip = 0 // reset nextGossip
-		g.lock.Unlock()
 	}
 }
 
-func (g *Gossip) GossipStep(myId int64) error {
+func (g *Gossip) GossipStep(
+	myId int64,
+	Tfail time.Duration,
+	Tsuspect time.Duration,
+	Tcleanup time.Duration) error {
 	currentTime := time.Now()
 	
 	// increase heartbeat counter
@@ -59,25 +36,13 @@ func (g *Gossip) GossipStep(myId int64) error {
 	}
 	
 	// update state
-	g.Membership.UpdateState(currentTime, g.Tfail, g.Tsuspect)
+	g.Membership.UpdateState(currentTime, Tfail, Tsuspect)
 
-	// Cleanup
-	g.Membership.Cleanup(currentTime, g.Tcleanup)
+	// cleanup
+	g.Membership.Cleanup(currentTime, Tcleanup)
 
-	// get next gossip target
-	target, err := g.NextTarget()
-	if err != nil {
-		return errors.New(fmt.Sprintf("Failed to get next target: %s", err.Error()))
-	}
-	if target == myId {
-		target, err = g.NextTarget()
-		if err != nil {
-			return errors.New(fmt.Sprintf("Failed to get next target: %s", err.Error()))
-		}
-	}
-
-	// get target info
-	targetInfo, err := g.Membership.GetInfo(target)
+	// get gossip target info
+	targetInfo, err := g.Membership.GetTarget()
 	if err != nil {
 		return errors.New(fmt.Sprintf("Failed to get target info: %s", err.Error()))
 	}

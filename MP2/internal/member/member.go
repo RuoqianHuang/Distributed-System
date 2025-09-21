@@ -38,6 +38,7 @@ type Membership struct {
 	lock sync.RWMutex         // read write mutex
 	Members []int64           // list of member Ids that is randomly permuted for gossip or pinging
 	InfoMap map[int64]Info    // member info map (might contain info of failed members)
+	roundRobinIndex int       // random permutation round robin index
 }
 
 func (m *Membership) Merge(memberInfo map[int64]Info, currentTime time.Time) bool {
@@ -71,6 +72,7 @@ func (m *Membership) Merge(memberInfo map[int64]Info, currentTime time.Time) boo
 			}
 		}
 		RandomPermutation(&m.Members) // randomize member ids for gossip or pinging
+		m.roundRobinIndex = 0 // reset round robin index
 	}
 	return memberChanged
 }
@@ -101,6 +103,7 @@ func (m *Membership) UpdateState(currentTime time.Time, Tfail time.Duration, Tsu
 			}
 		}
 		RandomPermutation(&m.Members) // randomize member ids for gossip or pinging
+		m.roundRobinIndex = 0 // reset round robin index
 	}
 	return anyFailed
 }	
@@ -128,30 +131,20 @@ func (m *Membership) String() string {
 	return res
 }
 
-func (m *Membership) RandomPermutation() {
+func (m *Membership) GetTarget() (Info, error) {
+	// TODO: maybe not to send message to self
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	RandomPermutation(&m.Members)
-}
-
-func (m *Membership) GetMemberId(idx int) (int64, error) {
-	// return the ith member in the member list
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	if(idx < 0 || idx >= len(m.Members)) {
-		return 0, errors.New("member index out of range")
+	targetInfo, ok := m.InfoMap[m.Members[m.roundRobinIndex]]
+	if !ok {
+		return Info{}, errors.New(fmt.Sprintf("Inconsistent membership!!!"))
 	}
-	return m.Members[idx], nil
-}
-
-func (m *Membership) GetInfo(id int64) (Info, error) {
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	info, ok := m.InfoMap[id]
-	if ok {
-		return info, nil
+	m.roundRobinIndex++
+	if m.roundRobinIndex == len(m.Members) {
+		RandomPermutation(&m.Members)
+		m.roundRobinIndex = 0
 	}
-	return Info{}, errors.New(fmt.Sprintf("No such ID: %d", id))
+	return targetInfo, nil
 }
 
 func (m *Membership) GetInfoMap() map[int64]Info {

@@ -40,7 +40,6 @@ const (
 	Ping MessageType = iota
 	Pong
 	Gossip
-	 
 )
 
 // Message data type for transmission
