@@ -1,10 +1,8 @@
 package gossip
 
 import (
-	"fmt"
 	"log"
 	"time"
-	"errors"
 	"cs425/mp2/internal/utils"
 	"cs425/mp2/internal/member"
 )
@@ -26,17 +24,17 @@ func (g *Gossip) GossipStep(
 	myId int64,
 	Tfail time.Duration,
 	Tsuspect time.Duration,
-	Tcleanup time.Duration) error {
+	Tcleanup time.Duration) {
 	currentTime := time.Now()
 	
 	// increase heartbeat counter
 	err := g.Membership.Heartbeat(myId, currentTime)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Failed to heartbeat: %s", err.Error()))
+		log.Printf("Failed to heartbeat: %s", err.Error())
 	}
 	
 	// update state
-	g.Membership.UpdateState(currentTime, Tfail, Tsuspect)
+	g.Membership.UpdateStateGossip(currentTime, Tfail, Tsuspect)
 
 	// cleanup
 	g.Membership.Cleanup(currentTime, Tcleanup)
@@ -44,18 +42,16 @@ func (g *Gossip) GossipStep(
 	// get gossip target info
 	targetInfo, err := g.Membership.GetTarget()
 	if err != nil {
-		return errors.New(fmt.Sprintf("Failed to get target info: %s", err.Error()))
+		log.Printf("Failed to get target info: %s", err.Error())
+	}else {
+		// copy member info map to send
+		infoMap := g.Membership.GetInfoMap()
+
+		// Send Gossip 
+		message := utils.Message{
+			Type: utils.Gossip,
+			InfoMap: infoMap,
+		}
+		utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
 	}
-
-	// copy member info map to send
-	infoMap := g.Membership.GetInfoMap()
-
-	// Send Gossip 
-	message := utils.Message{
-		Type: utils.Gossip,
-		InfoMap: infoMap,
-	}
-	utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
-
-	return nil
 }

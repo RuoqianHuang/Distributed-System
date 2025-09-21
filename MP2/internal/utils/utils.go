@@ -48,8 +48,9 @@ const (
 // Message data type for transmission
 type Message struct {
 	Type MessageType                // message type
-	SenderInfo member.Info          // sender's info (counter here is not used, and timestamp is a version number for hash!!!)
-	TargetInfo member.Info          // target's info (counter here is not used, and timestamp is a version number for hash!!!)
+	SenderInfo member.Info          // sender's info (counter and timestamp here are not used!!!)
+	TargetInfo member.Info          // target's info (counter and timestamp here are not used!!!)
+	RequesterInfo member.Info       // requester's info (if direct ping -> sender, if indirect ping -> who start the ping request)
 	InfoMap map[int64]member.Info   // membership Info map
 }
 

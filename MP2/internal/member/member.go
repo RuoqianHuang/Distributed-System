@@ -29,7 +29,8 @@ var stateName = map[MemberState]string{
 type Info struct {
 	Hostname string      // hostname
 	Port int             // port number
-	Timestamp time.Time  // local time stamp
+	Version time.Time    // version timestamp
+	Timestamp time.Time  // local timestamp
 	Counter int64        // heartbeat counter
 	State MemberState    // member state
 }
@@ -39,6 +40,10 @@ type Membership struct {
 	Members []int64           // list of member Ids that is randomly permuted for gossip or pinging
 	InfoMap map[int64]Info    // member info map (might contain info of failed members)
 	roundRobinIndex int       // random permutation round robin index
+}
+
+func (i *Info) String() string {
+	return fmt.Sprintf("Hostname: %s, Port: %d, Version: %s", i.Hostname, i.Port, i.Version.String())
 }
 
 func (m *Membership) Merge(memberInfo map[int64]Info, currentTime time.Time) bool {
@@ -77,7 +82,7 @@ func (m *Membership) Merge(memberInfo map[int64]Info, currentTime time.Time) boo
 	return memberChanged
 }
 
-func (m *Membership) UpdateState(currentTime time.Time, Tfail time.Duration, Tsuspect time.Duration) bool {
+func (m *Membership) UpdateStateGossip(currentTime time.Time, Tfail time.Duration, Tsuspect time.Duration) bool {
 	// check member states based on timestamps and thresholds
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -108,6 +113,20 @@ func (m *Membership) UpdateState(currentTime time.Time, Tfail time.Duration, Tsu
 	return anyFailed
 }	
 
+func (m *Membership) UpdateStateSwim(currentTime time.Time, id int64, state MemberState) bool {
+	// update state for a specific id, return true if any member beceom Failed.
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	info, ok := m.InfoMap[id]
+	if ok && info.State != Failed {
+		info.Timestamp = currentTime
+		info.State = state
+		m.InfoMap[id] = info
+		return state == Failed
+	}
+	return false
+}
+
 func (m *Membership) Cleanup(currentTime time.Time, Tcleanup time.Duration) {
 	// remove failed members
 	m.lock.Lock()
@@ -125,13 +144,14 @@ func (m *Membership) String() string {
 	defer m.lock.RUnlock()
 	for _, id := range m.Members {
 		info := m.InfoMap[id]
-		res += fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Timestamp: %s, Counter: %d, State: %s\n",
-			id, info.Hostname, info.Port, info.Timestamp.String(), info.Counter, stateName[info.State])
+		res += fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Version: %s, Timestamp: %s, Counter: %d, State: %s\n",
+			id, info.Hostname, info.Port, info.Version.String(), info.Timestamp.String(), info.Counter, stateName[info.State])
 	}
 	return res
 }
 
 func (m *Membership) GetTarget() (Info, error) {
+	// Round Robin with random permutation
 	// TODO: maybe not to send message to self
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -162,12 +182,12 @@ func (m *Membership) Heartbeat(id int64, currentTime time.Time) error {
 		info.Counter++
 		m.InfoMap[id] = info
 	}
-	return errors.New(fmt.Sprintf("No such ID: %d", id))
+	return errors.New(fmt.Sprintf("No such ID: %d, the node might fail!!!", id))
 }
 
 func HashInfo(info Info) int64 {
 	// hash hostname, port, and timestamp to 64 bit integer for map lookup
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", info.Hostname, info.Port, info.Timestamp.String())))
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", info.Hostname, info.Port, info.Version.String())))
 	return int64(binary.BigEndian.Uint64(hash[:8]))
 }
 
