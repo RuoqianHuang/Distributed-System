@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 	"sync"
+	"errors"
+	"math/rand"
 	"crypto/sha256"
 	"encoding/binary"
-	"cs425/mp2/internal/utils"
 )
 
 // member states
@@ -26,50 +27,50 @@ var stateName = map[MemberState]string{
 }
 
 type Info struct {
-	hostname string      // hostname
-	port int             // port number
-	timestamp time.Time  // local time stamp
-	counter int64        // heartbeat counter
-	state MemberState    // member state
+	Hostname string      // hostname
+	Port int             // port number
+	Timestamp time.Time  // local time stamp
+	Counter int64        // heartbeat counter
+	State MemberState    // member state
 }
 
 type Membership struct {
-	lock sync.RWMutex       // read write mutex
-	members map[int64]Info   // member map
-	memberIds []int64        // random permutation of member ids for gossip or pinging
+	lock sync.RWMutex         // read write mutex
+	Members []int64           // list of member Ids that is randomly permuted for gossip or pinging
+	InfoMap map[int64]Info    // member info map (might contain info of failed members)
 }
 
-func (m *Membership) Merge(memberInfo Membership, currentTime time.Time) bool {
+func (m *Membership) Merge(memberInfo map[int64]Info, currentTime time.Time) bool {
 	// merge memberInfo into m
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	memberChanged := false
-	for id, info := range memberInfo.members {
-		if member, ok := m.members[id]; ok {
-			if info.state == Failed {
-				if member.state != Failed {
-					info.timestamp = currentTime
-					m.members[id] = info // update to failed state
+	for id, info := range memberInfo {
+		if member, ok := m.InfoMap[id]; ok {
+			if info.State == Failed {
+				if member.State != Failed {
+					info.Timestamp = currentTime
+					m.InfoMap[id] = info // update to failed state
 				}
-			}else if info.counter > member.counter {
+			}else if info.Counter > member.Counter {
 				// update member info with higher counter
-				info.timestamp = currentTime
-				m.members[id] = info
+				info.Timestamp = currentTime
+				m.InfoMap[id] = info
 			}
 		}else {
-			info.timestamp = currentTime
-			m.members[id] = info // add new member
+			info.Timestamp = currentTime
+			m.InfoMap[id] = info // add new member
 			memberChanged = true
 		}
 	}
 	if memberChanged { 
-		m.memberIds = make([]int64, 0, len(m.members))
-		for id, info := range m.members {
-			if info.state != Failed {
-				m.memberIds = append(m.memberIds, id)
+		m.Members = make([]int64, 0, len(m.InfoMap))
+		for id, info := range m.InfoMap {
+			if info.State != Failed {
+				m.Members = append(m.Members, id)
 			}
 		}
-		utils.RandomPermutation(&m.memberIds) // randomize member ids for gossip or pinging
+		RandomPermutation(&m.Members) // randomize member ids for gossip or pinging
 	}
 	return memberChanged
 }
@@ -79,26 +80,27 @@ func (m *Membership) UpdateState(currentTime time.Time, Tfail time.Duration, Tsu
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	anyFailed := false
-	for id, info := range m.members {
-		elapsed := currentTime.Sub(info.timestamp)
-		if info.state == Alive && elapsed > Tsuspect {
-			info.state = Suspected
-			info.timestamp = currentTime
-			m.members[id] = info
-		}else if info.state == Suspected && elapsed > Tfail {
-			info.state = Failed
-			info.timestamp = currentTime
-			m.members[id] = info
+	for id, info := range m.InfoMap {
+		elapsed := currentTime.Sub(info.Timestamp)
+		if info.State == Alive && elapsed > Tsuspect {
+			info.State = Suspected
+			info.Timestamp = currentTime
+			m.InfoMap[id] = info
+		}else if info.State == Suspected && elapsed > Tfail {
+			info.State = Failed
+			info.Timestamp = currentTime
+			m.InfoMap[id] = info
+			anyFailed = true
 		}
 	}
 	if anyFailed {
-		m.memberIds = make([]int64, 0, len(m.members))
-		for id, info := range m.members {
-			if info.state != Failed {
-				m.memberIds = append(m.memberIds, id)
+		m.Members = make([]int64, 0, len(m.InfoMap))
+		for id, info := range m.InfoMap {
+			if info.State != Failed {
+				m.Members = append(m.Members, id)
 			}
 		}
-		utils.RandomPermutation(&m.memberIds) // randomize member ids for gossip or pinging
+		RandomPermutation(&m.Members) // randomize member ids for gossip or pinging
 	}
 	return anyFailed
 }	
@@ -107,9 +109,9 @@ func (m *Membership) Cleanup(currentTime time.Time, Tcleanup time.Duration) {
 	// remove failed members
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	for id, info := range m.members {
-		if info.state == Failed && currentTime.Sub(info.timestamp) > Tcleanup {
-			delete(m.members, id) // remove failed members
+	for id, info := range m.InfoMap {
+		if info.State == Failed && currentTime.Sub(info.Timestamp) > Tcleanup {
+			delete(m.InfoMap, id) // remove info about failed members
 		}
 	}
 }
@@ -118,17 +120,69 @@ func (m *Membership) String() string {
 	res := "Membership:\n"
 	m.lock.RLock()
 	defer m.lock.RUnlock()
-	for _, id := range m.memberIds {
-		info := m.members[id]
+	for _, id := range m.Members {
+		info := m.InfoMap[id]
 		res += fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Timestamp: %s, Counter: %d, State: %s\n",
-			id, info.hostname, info.port, info.timestamp.String(), info.counter, stateName[info.state])
+			id, info.Hostname, info.Port, info.Timestamp.String(), info.Counter, stateName[info.State])
 	}
 	return res
 }
 
-func hashInfo(info Info) int64 {
+func (m *Membership) RandomPermutation() {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	RandomPermutation(&m.Members)
+}
+
+func (m *Membership) GetMemberId(idx int) (int64, error) {
+	// return the ith member in the member list
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	if(idx < 0 || idx >= len(m.Members)) {
+		return 0, errors.New("member index out of range")
+	}
+	return m.Members[idx], nil
+}
+
+func (m *Membership) GetInfo(id int64) (Info, error) {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	info, ok := m.InfoMap[id]
+	if ok {
+		return info, nil
+	}
+	return Info{}, errors.New(fmt.Sprintf("No such ID: %d", id))
+}
+
+func (m *Membership) GetInfoMap() map[int64]Info {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	return m.InfoMap
+}
+
+func (m *Membership) Heartbeat(id int64, currentTime time.Time) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	info, ok := m.InfoMap[id]
+	if ok {
+		info.Timestamp = currentTime
+		info.Counter++
+		m.InfoMap[id] = info
+	}
+	return errors.New(fmt.Sprintf("No such ID: %d", id))
+}
+
+func HashInfo(info Info) int64 {
 	// hash hostname, port, and timestamp to 64 bit integer for map lookup
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", info.hostname, info.port, info.timestamp.String())))
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", info.Hostname, info.Port, info.Timestamp.String())))
 	return int64(binary.BigEndian.Uint64(hash[:8]))
 }
 
+func RandomPermutation(arr *[]int64)  {
+	rng := rand.NewSource(time.Now().UnixNano())
+	n := len(*arr)
+	for i := 0; i < n; i++ {
+		j := rng.Int63() % int64(i + 1)
+		(*arr)[i], (*arr)[j] = (*arr)[j], (*arr)[i] // swap elements
+	}
+}
