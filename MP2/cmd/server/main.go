@@ -25,7 +25,7 @@ const (
 	Init
 )
 
-const ProbeTimeout time.Duration = 3 * time.Second
+const ProbeTimeout time.Duration = 10 * time.Second
 
 type Server struct{
 	Tround time.Duration           // Duration of a round
@@ -57,19 +57,6 @@ func (s* Server) CLI(args Args, reply *string) error {
 }
 
 func (s *Server) joinGroup() {
-	// Send message to 10 other introducer
-	message := utils.Message{
-		Type: utils.Probe,
-		SenderInfo: s.Info,
-		InfoMap: s.membership.GetInfoMap(),
-	}
-	for _, hostname := range utils.HOSTS {
-		err := utils.SendMessage(message, hostname, utils.DEFAULT_PORT)
-		if err != nil {
-			log.Printf("Failed to send probe message to %s:%d: %s", hostname, utils.DEFAULT_PORT, err.Error())
-		}
-	}
-	// wait for probe ack
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -83,9 +70,21 @@ func (s *Server) joinGroup() {
 		log.Fatalf("UDP listen failed: %s", err.Error())
 	}
 	defer conn.Close()
-
 	conn.SetReadDeadline(time.Now().Add(ProbeTimeout))
 
+	// Send message to 10 other introducer
+	message := utils.Message{
+		Type: utils.Probe,
+		SenderInfo: s.Info,
+		InfoMap: s.membership.GetInfoMap(),
+	}
+	for _, hostname := range utils.HOSTS {
+		err := utils.SendMessage(message, hostname, utils.DEFAULT_PORT)
+		if err != nil {
+			log.Printf("Failed to send probe message to %s:%d: %s", hostname, utils.DEFAULT_PORT, err.Error())
+		}
+	}
+	// wait for probe ack
 	buffer := make([]byte, 4096)
 	for {
 		_, _, err := conn.ReadFromUDP(buffer)
@@ -142,6 +141,8 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 				s.swim.HandleIncomingMessage(message, s.Info)
 			}else if message.Type == utils.Probe{
 				// someone want to join the group, send some information back
+				log.Printf("Receive probe message: %v", message)
+				s.membership.Merge(message.InfoMap, time.Now()) // merge new member
 				messageType := utils.ProbeAckGossip
 				s.lock.RLock()
 				if s.state == Swim {
@@ -157,6 +158,8 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 				err := utils.SendMessage(ackMessage, message.SenderInfo.Hostname, message.SenderInfo.Port)
 				if err != nil {
 					log.Printf("Failed to send probe ack message to %s: %s", message.SenderInfo.String(), err.Error())
+				}else {
+					log.Printf("Welcome, send probe ack message to %s:%d: %v", message.SenderInfo.Hostname, message.SenderInfo.Port, ackMessage)
 				}
 			}else if message.Type == utils.UseSwim || message.Type == utils.UseGossip {
 				// TODO: switch between gossip and swim
@@ -178,7 +181,6 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 	for {
 		select {
 		case <- ticker.C:
-			log.Printf("-->%s", s.membership.String())
 			if s.state == Swim {
 				s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup)
 			}else if s.state == Gossip {
@@ -215,7 +217,7 @@ func main() {
 
 	// some default parameters
 	cliPort := 12345
-	serverPort := 8787
+	serverPort := utils.DEFAULT_PORT
 	Tround       := time.Second / 10
 	Tsuspect     := Tround * 5
 	Tfail        := Tround * 5
