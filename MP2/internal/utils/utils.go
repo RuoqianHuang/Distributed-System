@@ -39,13 +39,18 @@ type MessageType int
 const (
 	Ping MessageType = iota
 	Pong
+	PingReq
 	Gossip
+	UseSwim
+	UseGossip
 )
 
 // Message data type for transmission
 type Message struct {
-	Type MessageType
-	Info map[int64]member.Info
+	Type MessageType                // message type
+	SenderInfo member.Info          // sender's info (counter here is not used, and timestamp is a version number for hash!!!)
+	TargetInfo member.Info          // target's info (counter here is not used, and timestamp is a version number for hash!!!)
+	InfoMap map[int64]member.Info   // membership Info map
 }
 
 func Serialize(obj Message) ([]byte, error) {
@@ -71,7 +76,7 @@ func Deserialize(data []byte) (Message, error) {
 	return result, nil
 }
 
-func SendInfo(message Message, hostname string, port int) error {
+func SendMessage(message Message, hostname string, port int) error {
 	address := fmt.Sprintf("%s:%d", hostname, port);
 	udpAddress, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {

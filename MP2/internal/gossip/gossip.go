@@ -14,9 +14,9 @@ type Gossip struct {
 	Membership *member.Membership  // membership
 }
 
-func (g *Gossip) HandleRequest(message utils.Message) {
+func (g *Gossip) HandleIncomingMessage(message utils.Message) {
 	// merge incoming membership info
-	anyChanged := g.Membership.Merge(message.Info, time.Now())
+	anyChanged := g.Membership.Merge(message.InfoMap, time.Now())
 	if anyChanged {
 		log.Printf("Membership updated: %s\n", g.Membership.String())
 	}
@@ -53,9 +53,9 @@ func (g *Gossip) GossipStep(
 	// Send Gossip 
 	message := utils.Message{
 		Type: utils.Gossip,
-		Info: infoMap,
+		InfoMap: infoMap,
 	}
-	utils.SendInfo(message, targetInfo.Hostname, targetInfo.Port)
+	utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
 
 	return nil
 }
