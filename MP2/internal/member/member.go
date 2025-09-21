@@ -181,6 +181,7 @@ func (m *Membership) Heartbeat(id int64, currentTime time.Time) error {
 		info.Timestamp = currentTime
 		info.Counter++
 		m.InfoMap[id] = info
+		return nil
 	}
 	return errors.New(fmt.Sprintf("No such ID: %d, the node might fail!!!", id))
 }
