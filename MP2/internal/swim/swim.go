@@ -122,7 +122,8 @@ func (s *Swim) SwimStep(
 	myInfo member.Info,
 	k int,
 	TpingFail time.Duration,
-	TpingReqFail time.Duration) {
+	TpingReqFail time.Duration,
+	Tcleanup time.Duration) {
 	currentTime := time.Now()
 	// increase heartbeat counter; here it acts as an incarnation number
 	err := s.Membership.Heartbeat(myId, currentTime) 
@@ -161,6 +162,8 @@ func (s *Swim) SwimStep(
 			s.SendPingReq(k, myInfo)
 		}
 	}
+
+	s.Membership.Cleanup(currentTime, Tcleanup)
 
 	// get ping target info
 	targetInfo, err := s.Membership.GetTarget()
