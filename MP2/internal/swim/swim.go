@@ -190,3 +190,11 @@ func (s *Swim) SwimStep(
 		s.waitAcksDirect[targetId] = targetInfo
 	}
 }
+
+func NewSwim(membership *member.Membership) *Swim {
+	return &Swim{
+		Membership: membership,
+		waitAcksDirect: make(map[int64]member.Info, 32),
+		waitAcksIndirect: make(map[int64]member.Info, 32),
+	}
+}

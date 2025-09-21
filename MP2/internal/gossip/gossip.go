@@ -55,3 +55,9 @@ func (g *Gossip) GossipStep(
 		utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
 	}
 }
+
+func NewGossip(membership *member.Membership) *Gossip {
+	return &Gossip{
+		Membership: membership,
+	}
+}
