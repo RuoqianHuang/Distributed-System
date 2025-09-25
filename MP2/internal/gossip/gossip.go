@@ -1,15 +1,14 @@
 package gossip
 
 import (
+	"cs425/mp2/internal/member"
+	"cs425/mp2/internal/utils"
 	"log"
 	"time"
-	"cs425/mp2/internal/utils"
-	"cs425/mp2/internal/member"
 )
 
-
 type Gossip struct {
-	Membership *member.Membership  // membership
+	Membership *member.Membership // membership
 }
 
 func (g *Gossip) HandleIncomingMessage(message utils.Message) {
@@ -21,18 +20,18 @@ func (g *Gossip) HandleIncomingMessage(message utils.Message) {
 }
 
 func (g *Gossip) GossipStep(
-	myId int64,
+	myId uint64,
 	Tfail time.Duration,
 	Tsuspect time.Duration,
 	Tcleanup time.Duration) {
 	currentTime := time.Now()
-	
+
 	// increase heartbeat counter
 	err := g.Membership.Heartbeat(myId, currentTime)
 	if err != nil {
 		log.Printf("Failed to heartbeat: %s", err.Error())
 	}
-	
+
 	// update state
 	g.Membership.UpdateStateGossip(currentTime, Tfail, Tsuspect)
 
@@ -43,13 +42,13 @@ func (g *Gossip) GossipStep(
 	targetInfo, err := g.Membership.GetTarget()
 	if err != nil {
 		log.Printf("Failed to get target info: %s", err.Error())
-	}else {
+	} else {
 		// copy member info map to send
 		infoMap := g.Membership.GetInfoMap()
 
-		// Send Gossip 
+		// Send Gossip
 		message := utils.Message{
-			Type: utils.Gossip,
+			Type:    utils.Gossip,
 			InfoMap: infoMap,
 		}
 		utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)

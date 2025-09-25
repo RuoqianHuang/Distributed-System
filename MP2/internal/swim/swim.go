@@ -1,19 +1,18 @@
 package swim
 
-
 import (
-	"log"
-	"time"
-	"sync"
-	"cs425/mp2/internal/utils"
 	"cs425/mp2/internal/member"
+	"cs425/mp2/internal/utils"
+	"log"
+	"sync"
+	"time"
 )
 
 type Swim struct {
-	Membership *member.Membership             // membership
-	waitAcksDirect map[int64]member.Info      // members that are pinged yet haven't ponged back
-	waitAcksIndirect map[int64]member.Info    // members that are indirectly pinged yet haven't ponged back
-	lock sync.RWMutex                         // read write mutex for waitAcks
+	Membership       *member.Membership     // membership
+	waitAcksDirect   map[uint64]member.Info // members that are pinged yet haven't ponged back
+	waitAcksIndirect map[uint64]member.Info // members that are indirectly pinged yet haven't ponged back
+	lock             sync.RWMutex           // read write mutex for waitAcks
 }
 
 func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) {
@@ -24,13 +23,13 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 		log.Printf("Membership updated: %s\n", s.Membership.String())
 	}
 
-	if message.Type == utils.Ping { // ping 
+	if message.Type == utils.Ping { // ping
 		// create ack message
 		ackMessage := utils.Message{
-			Type: utils.Pong,
-			InfoMap: s.Membership.GetInfoMap(),
-			SenderInfo: myInfo,
-			TargetInfo: message.SenderInfo,
+			Type:          utils.Pong,
+			InfoMap:       s.Membership.GetInfoMap(),
+			SenderInfo:    myInfo,
+			TargetInfo:    message.SenderInfo,
 			RequesterInfo: message.RequesterInfo,
 		}
 		// send ping ack
@@ -38,7 +37,7 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 		if err != nil {
 			log.Printf("Failed to send ping ack message to %s: %s", message.SenderInfo.String(), err.Error())
 		}
-	}else if message.Type == utils.Pong { // ping ack message
+	} else if message.Type == utils.Pong { // ping ack message
 		// three types of ping ack:
 		// 1. ping ack of my own ping
 		// 2. ping ack of my own indirect ping
@@ -62,13 +61,13 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 				// delete senderId from the map, don't need extra update to the member info, since the info is already merged
 				delete(s.waitAcksIndirect, senderId)
 			}
-			// ignore ping ack that is not recorded 
-		}else { // other's ack, just send an ack back
-			ackMessage := utils.Message {
-				Type: utils.Ping,
-				InfoMap: s.Membership.GetInfoMap(), // use the latest info map for faster convergence
-				SenderInfo: myInfo,
-				TargetInfo: message.RequesterInfo,
+			// ignore ping ack that is not recorded
+		} else { // other's ack, just send an ack back
+			ackMessage := utils.Message{
+				Type:          utils.Ping,
+				InfoMap:       s.Membership.GetInfoMap(), // use the latest info map for faster convergence
+				SenderInfo:    myInfo,
+				TargetInfo:    message.RequesterInfo,
 				RequesterInfo: message.RequesterInfo,
 			}
 			// send ping ack
@@ -77,13 +76,13 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 				log.Printf("Failed to send indirect ping ack message to %s: %s", message.RequesterInfo.String(), err.Error())
 			}
 		}
-	}else if message.Type == utils.PingReq { // ping request
-		// create ping message 
-		pingMessage := utils.Message {
-			Type: utils.Ping,
-			InfoMap: s.Membership.GetInfoMap(), // use the latest info map for faster convergence
-			SenderInfo: myInfo,
-			TargetInfo: message.TargetInfo,
+	} else if message.Type == utils.PingReq { // ping request
+		// create ping message
+		pingMessage := utils.Message{
+			Type:          utils.Ping,
+			InfoMap:       s.Membership.GetInfoMap(), // use the latest info map for faster convergence
+			SenderInfo:    myInfo,
+			TargetInfo:    message.TargetInfo,
 			RequesterInfo: message.RequesterInfo,
 		}
 		// send ping message
@@ -94,7 +93,7 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 	}
 }
 
-func (s *Swim) SendPingReq(k int, myInfo member.Info) { 
+func (s *Swim) SendPingReq(k int, myInfo member.Info) {
 	// Send ping request to other k member
 	infoMap := s.Membership.GetInfoMap()
 	for i := 0; i < k; i++ {
@@ -103,22 +102,22 @@ func (s *Swim) SendPingReq(k int, myInfo member.Info) {
 			log.Printf("Failed to get target info for ping request: %s", err.Error())
 		}
 		message := utils.Message{
-			Type: utils.PingReq,
-			InfoMap: infoMap,
-			SenderInfo: myInfo,
-			TargetInfo: targetInfo, 
+			Type:          utils.PingReq,
+			InfoMap:       infoMap,
+			SenderInfo:    myInfo,
+			TargetInfo:    targetInfo,
 			RequesterInfo: myInfo,
 		}
-		// send message 
+		// send message
 		err = utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
 		if err != nil {
 			log.Printf("Failed to send message to %s: %s", targetInfo.String(), err.Error())
 		}
 	}
-} 
+}
 
 func (s *Swim) SwimStep(
-	myId int64,
+	myId uint64,
 	myInfo member.Info,
 	k int,
 	TpingFail time.Duration,
@@ -126,7 +125,7 @@ func (s *Swim) SwimStep(
 	Tcleanup time.Duration) {
 	currentTime := time.Now()
 	// increase heartbeat counter; here it acts as an incarnation number
-	err := s.Membership.Heartbeat(myId, currentTime) 
+	err := s.Membership.Heartbeat(myId, currentTime)
 	if err != nil {
 		log.Printf("Failed to heartbeat: %s", err.Error())
 	}
@@ -138,12 +137,12 @@ func (s *Swim) SwimStep(
 	// check if there's any waitAcksIndirect haven't receive pong after TpingReqFail
 	for id, info := range s.waitAcksIndirect {
 		if currentTime.Sub(info.Timestamp) > TpingReqFail {
-			if info.State == member.Alive{ // update its state to suspect
+			if info.State == member.Alive { // update its state to suspect
 				s.Membership.UpdateStateSwim(currentTime, id, member.Suspected)
 				info.Timestamp = currentTime
 				info.State = member.Suspected
 				s.waitAcksIndirect[id] = info
-			}else if info.State == member.Suspected{ // node failed, update its state and remove it from waitAcksIndirect
+			} else if info.State == member.Suspected { // node failed, update its state and remove it from waitAcksIndirect
 				s.Membership.UpdateStateSwim(currentTime, id, member.Failed)
 				delete(s.waitAcksIndirect, id)
 			}
@@ -173,17 +172,17 @@ func (s *Swim) SwimStep(
 
 	// create ping message
 	message := utils.Message{
-		Type: utils.Ping,
-		InfoMap: s.Membership.GetInfoMap(), // use the latest info map
-		SenderInfo: myInfo,
-		TargetInfo: targetInfo,
+		Type:          utils.Ping,
+		InfoMap:       s.Membership.GetInfoMap(), // use the latest info map
+		SenderInfo:    myInfo,
+		TargetInfo:    targetInfo,
 		RequesterInfo: myInfo,
 	}
 	// send message
 	err = utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
 	if err != nil {
 		log.Printf("Failed to send ping message to %s: %s", targetInfo.String(), err.Error())
-	}else {
+	} else {
 		// add message to waitAcksDirect
 		targetId := member.HashInfo(targetInfo)
 		targetInfo.Timestamp = currentTime
@@ -193,8 +192,8 @@ func (s *Swim) SwimStep(
 
 func NewSwim(membership *member.Membership) *Swim {
 	return &Swim{
-		Membership: membership,
-		waitAcksDirect: make(map[int64]member.Info, 32),
-		waitAcksIndirect: make(map[int64]member.Info, 32),
+		Membership:       membership,
+		waitAcksDirect:   make(map[uint64]member.Info, 32),
+		waitAcksIndirect: make(map[uint64]member.Info, 32),
 	}
 }

@@ -1,18 +1,18 @@
 package main
 
 import (
-	"os"
 	"fmt"
 	"log"
 	"net"
 	"net/rpc"
-	"time"
+	"os"
 	"strconv"
+	"time"
 )
 
 const (
-	CONNECTION_TIMEOUT =  1 * time.Second
-	CALL_TIMEOUT       =  1 * time.Second
+	CONNECTION_TIMEOUT = 1 * time.Second
+	CALL_TIMEOUT       = 1 * time.Second
 )
 
 // arguments for cli tool
@@ -43,11 +43,11 @@ func CallWithTimeout(
 		callChan <- client.Call("Server.CLI", args, result)
 	}()
 	select {
-	case err := <- callChan:
+	case err := <-callChan:
 		if err != nil {
 			log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
 		}
-	case <- time.After(CALL_TIMEOUT):
+	case <-time.After(CALL_TIMEOUT):
 		log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
 	}
 }

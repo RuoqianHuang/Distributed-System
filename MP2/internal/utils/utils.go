@@ -1,14 +1,12 @@
 package utils
 
-
 import (
-	"os"
+	"bytes"
+	"cs425/mp2/internal/member"
+	"encoding/gob"
 	"fmt"
 	"net"
-	"bytes"
-	"errors"
-	"encoding/gob"
-	"cs425/mp2/internal/member"
+	"os"
 )
 
 // server hostnames
@@ -43,7 +41,7 @@ const (
 	Pong
 	PingReq
 	Gossip
-	Probe                      // message for joining
+	Probe // message for joining
 	ProbeAckGossip
 	ProbeAckSwim
 	UseSwim
@@ -52,11 +50,11 @@ const (
 
 // Message data type for transmission
 type Message struct {
-	Type MessageType                // message type
-	SenderInfo member.Info          // sender's info (counter and timestamp here are not used!!!)
-	TargetInfo member.Info          // target's info (counter and timestamp here are not used!!!)
-	RequesterInfo member.Info       // requester's info (if direct ping -> sender, if indirect ping -> who start the ping request)
-	InfoMap map[int64]member.Info   // membership Info map
+	Type          MessageType            // message type
+	SenderInfo    member.Info            // sender's info (counter and timestamp here are not used!!!)
+	TargetInfo    member.Info            // target's info (counter and timestamp here are not used!!!)
+	RequesterInfo member.Info            // requester's info (if direct ping -> sender, if indirect ping -> who start the ping request)
+	InfoMap       map[uint64]member.Info // membership Info map
 }
 
 func Serialize(obj Message) ([]byte, error) {
@@ -83,28 +81,28 @@ func Deserialize(data []byte) (Message, error) {
 }
 
 func SendMessage(message Message, hostname string, port int) error {
-	address := fmt.Sprintf("%s:%d", hostname, port);
+	address := fmt.Sprintf("%s:%d", hostname, port)
 	udpAddress, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error resolving UDP address: %s", err.Error()))
-	}	
+		return fmt.Errorf("error resolving UDP address: %s", err.Error())
+	}
 	//  establist a udp connection
 	conn, err := net.DialUDP("udp", nil, udpAddress)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error creating udp connection: %s", err.Error()))
+		return fmt.Errorf("error creating udp connection: %s", err.Error())
 	}
 	defer conn.Close()
 
-	// serialize 
+	// serialize
 	serializedMessage, err := Serialize(message)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error serializing message: %s", err.Error()))
+		return fmt.Errorf("error serializing message: %s", err.Error())
 	}
 
 	// send the message
 	_, err = conn.Write(serializedMessage)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error sending data: %s", err.Error()))
+		return fmt.Errorf("error sending data: %s", err.Error())
 	}
 	return nil
 }

@@ -34,7 +34,7 @@ type Server struct {
 	TpingFail    time.Duration      // direct ping fail time for swim
 	TpingReqFail time.Duration      // indirect ping fail time for swim
 	Tcleanup     time.Duration      // time to cleanup failed member's information
-	Id           int64              // node's ID
+	Id           uint64             // node's ID
 	K            int                // k for swim
 	Info         member.Info        // node's own information
 	membership   *member.Membership // member ship information
@@ -385,10 +385,10 @@ func main() {
 
 	log.Printf("My ID: %d, Hostname: %s, Port: %d\n", myId, myInfo.Hostname, myInfo.Port)
 	membership := member.Membership{
-		InfoMap: map[int64]member.Info{
+		InfoMap: map[uint64]member.Info{
 			myId: myInfo,
 		},
-		Members: []int64{myId},
+		Members: []uint64{myId},
 	}
 
 	// create gossip instance
