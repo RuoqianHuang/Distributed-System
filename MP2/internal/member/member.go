@@ -173,10 +173,10 @@ func (m *Membership) Table() string {
 		}
 		return infoList[i].Port < infoList[j].Port
 	})  
-	// ------------------------------------------------------------
-	// | ID    |  Hostname | Port | Version | Timestamp | Counter |
-	// | ID    |  Hostname | Port | Version | Timestamp | Counter |
-	// ------------------------------------------------------------
+	// --------------------------------------------------------------------
+	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
+	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
+	// --------------------------------------------------------------------
 	maxLengths := map[string]int{
 		"Id": 0,
 		"Hostname": 0,
@@ -184,6 +184,7 @@ func (m *Membership) Table() string {
 		"Version": 0,
 		"Timestamp": 0,
 		"Counter": 0,
+		"State": 0,
 	}
 	for _, i := range infoList {
 		info := m.InfoMap[i.Id]
@@ -194,6 +195,7 @@ func (m *Membership) Table() string {
 			"Version": len(info.Version.Format(time.RFC3339Nano)),
 			"Timestamp": len(info.Timestamp.Format(time.RFC3339Nano)),
 			"Counter": len(fmt.Sprintf("%d", info.Counter)),
+			"State": len(stateName[info.State]),
 		}
 		for key, value := range lengths {
 			if maxLengths[key] < value {
@@ -201,7 +203,7 @@ func (m *Membership) Table() string {
 			}
 		}
 	}
-	totalLength := 19
+	totalLength := 22
 	for _, v := range maxLengths {
 		totalLength = totalLength + v
 	}
@@ -250,6 +252,13 @@ func (m *Membership) Table() string {
 		s = fmt.Sprintf("%d", info.Counter)
 		if len(s) < maxLengths["Counter"] {
 			s = s + strings.Repeat(" ", maxLengths["Counter"] - len(s))
+		}
+		line = line + s + " | "
+
+		// State 
+		s = stateName[info.State]
+		if len(s) < maxLengths["State"] {
+			s = s + strings.Repeat(" ", maxLengths["State"] - len(s))
 		}
 		line = line + s + " |"
 
