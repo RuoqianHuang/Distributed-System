@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -148,6 +150,115 @@ func (m *Membership) String() string {
 	return res
 }
 
+func (m *Membership) Table() string {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	type Pair struct {
+		Id uint64
+		Hostname string 
+		Port int
+	}
+	infoList := make([]Pair, 0, 16)
+	for _, id := range m.Members {
+		info := m.InfoMap[id]
+		infoList = append(infoList, Pair{
+			Id: id,
+			Hostname: info.Hostname,
+			Port: info.Port,
+		})
+	}
+	sort.Slice(infoList, func(i, j int) bool {
+		if infoList[i].Hostname != infoList[j].Hostname {
+			return infoList[i].Hostname < infoList[j].Hostname
+		}
+		return infoList[i].Port < infoList[j].Port
+	})  
+	// ------------------------------------------------------------
+	// | ID    |  Hostname | Port | Version | Timestamp | Counter |
+	// | ID    |  Hostname | Port | Version | Timestamp | Counter |
+	// ------------------------------------------------------------
+	maxLengths := map[string]int{
+		"Id": 0,
+		"Hostname": 0,
+		"Port": 0,
+		"Version": 0,
+		"Timestamp": 0,
+		"Counter": 0,
+	}
+	for _, i := range infoList {
+		info := m.InfoMap[i.Id]
+		lengths := map[string]int{
+			"Id": len(fmt.Sprint("%d", i.Id)),
+			"Hostname": len(i.Hostname),
+			"Port": len(fmt.Sprintf("%d", i.Port)),
+			"Version": len(info.Version.Format(time.RFC3339Nano)),
+			"Timestamp": len(info.Timestamp.Format(time.RFC3339Nano)),
+			"Counter": len(fmt.Sprintf("%d", info.Counter)),
+		}
+		for key, value := range lengths {
+			if maxLengths[key] < value {
+				maxLengths[key] = value
+			}
+		}
+	}
+	totalLength := 19
+	for _, v := range maxLengths {
+		totalLength = totalLength + v
+	}
+
+	res := strings.Repeat("-", totalLength) + "\n"
+	for _, i := range infoList {
+		info := m.InfoMap[i.Id]
+		line := "| "
+		
+		// Id
+		s := fmt.Sprintf("%d", i.Id)
+		if len(s) < maxLengths["Id"] {
+			s = s + strings.Repeat(" ", maxLengths["Id"] - len(s))
+		}
+		line = line + s + " | "
+
+		// Hostname
+		s = i.Hostname
+		if len(s) < maxLengths["Hostname"] {
+			s = s + strings.Repeat(" ", maxLengths["Hostname"] - len(s))
+		}
+		line = line + s + " | "
+
+		// Port
+		s = fmt.Sprintf("%d", i.Port)
+		if len(s) < maxLengths["Port"] {
+			s = s + strings.Repeat(" ", maxLengths["Port"] - len(s))
+		}
+		line = line + s + " | "
+
+		// Version
+		s = info.Version.Format(time.RFC3339Nano)
+		if len(s) < maxLengths["Version"] {
+			s = s + strings.Repeat(" ", maxLengths["Version"] - len(s))
+		}
+		line = line + s + " | "
+
+		// Timestamp
+		s = info.Timestamp.Format(time.RFC3339Nano)
+		if len(s) < maxLengths["Timestamp"] {
+			s = s + strings.Repeat(" ", maxLengths["Timestamp"] - len(s))
+		}
+		line = line + s + " | "
+
+		// Counter 
+		s = fmt.Sprintf("%d", info.Counter)
+		if len(s) < maxLengths["Counter"] {
+			s = s + strings.Repeat(" ", maxLengths["Counter"] - len(s))
+		}
+		line = line + s + " |"
+
+		res = res + line + "\n"
+	}
+	res = res + strings.Repeat("-", totalLength) + "\n"
+	return res
+}
+
 func (m *Membership) GetTarget() (Info, error) {
 	// Round Robin with random permutation
 	// TODO: maybe not to send message to self
@@ -155,7 +266,7 @@ func (m *Membership) GetTarget() (Info, error) {
 	defer m.lock.Unlock()
 	targetInfo, ok := m.InfoMap[m.Members[m.roundRobinIndex]]
 	if !ok {
-		return Info{}, fmt.Errorf("Inconsistent membership!!!")
+		return Info{}, fmt.Errorf("inconsistent membership!!!")
 	}
 	m.roundRobinIndex++
 	if m.roundRobinIndex == len(m.Members) {

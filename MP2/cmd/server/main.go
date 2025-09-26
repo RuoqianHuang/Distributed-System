@@ -25,7 +25,7 @@ const (
 	Init
 )
 
-const ProbeTimeout time.Duration = 10 * time.Second
+const ProbeTimeout time.Duration = 5 * time.Second
 
 type Server struct {
 	Tround       time.Duration      // Duration of a round
@@ -66,7 +66,7 @@ func (s *Server) CLI(args Args, reply *string) error {
 		s.lock.RUnlock()
 		*reply = fmt.Sprintf("Current protocol: %s", s.getStateString(state))
 	case "membership":
-		*reply = s.membership.String()
+		*reply = s.membership.Table()
 	default:
 		*reply = "Unknown command. Available commands: switch_gossip, switch_swim, status, membership"
 	}
@@ -154,11 +154,12 @@ func (s *Server) handleSwitchMessage(message utils.Message) {
 
 	// Check if we need to switch protocols
 	var newState ServerState
-	if message.Type == utils.UseGossip {
+	switch message.Type {
+	case utils.UseGossip:
 		newState = Gossip
-	} else if message.Type == utils.UseSwim {
+	case utils.UseSwim:
 		newState = Swim
-	} else {
+	default:
 		log.Printf("Unknown switch message type: %v", message.Type)
 		return
 	}
@@ -298,16 +299,14 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 	log.Printf("Failure detector stared with a period of %s", s.Tround.String())
 
 	// The main event loop
-	for {
-		select {
-		case <-ticker.C:
-			if s.state == Swim {
-				s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup)
-			} else if s.state == Gossip {
-				s.gossip.GossipStep(s.Id, s.Tfail, s.Tsuspect, s.Tcleanup)
-			}
-			// TODO: change period
+	for range ticker.C {
+		switch s.state {
+		case Swim:
+			s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup)
+		case Gossip:
+			s.gossip.GossipStep(s.Id, s.Tfail, s.Tsuspect, s.Tcleanup)
 		}
+		// TODO: change period
 	}
 }
 

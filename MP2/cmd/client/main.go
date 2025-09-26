@@ -90,6 +90,6 @@ func main() {
 	result := new(string)
 	CallWithTimeout(hostname, port, query, result)
 
-	log.Println(*result)
+	log.Printf("\n%s", *result)
 
 }
