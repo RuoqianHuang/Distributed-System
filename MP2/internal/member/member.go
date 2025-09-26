@@ -43,7 +43,7 @@ type Membership struct {
 }
 
 func (i *Info) String() string {
-	return fmt.Sprintf("Hostname: %s, Port: %d, Version: %s", i.Hostname, i.Port, i.Version.String())
+	return fmt.Sprintf("Hostname: %s, Port: %d, Version: %s", i.Hostname, i.Port, i.Version.Format(time.RFC3339Nano))
 }
 
 func (m *Membership) Merge(memberInfo map[uint64]Info, currentTime time.Time) bool {
@@ -145,7 +145,7 @@ func (m *Membership) String() string {
 	for _, id := range m.Members {
 		info := m.InfoMap[id]
 		res += fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Version: %s, Timestamp: %s, Counter: %d, State: %s\n",
-			id, info.Hostname, info.Port, info.Version.String(), info.Timestamp.String(), info.Counter, stateName[info.State])
+			id, info.Hostname, info.Port, info.Version.Format(time.RFC3339Nano), info.Timestamp.Format(time.RFC3339Nano), info.Counter, stateName[info.State])
 	}
 	return res
 }
@@ -297,7 +297,7 @@ func (m *Membership) Heartbeat(id uint64, currentTime time.Time) error {
 
 func HashInfo(info Info) uint64 {
 	// hash hostname, port, and timestamp to 64 bit integer for map lookup
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", info.Hostname, info.Port, info.Version.String())))
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", info.Hostname, info.Port, info.Version.Format(time.RFC3339Nano))))
 	return uint64(binary.BigEndian.Uint64(hash[:8]))
 }
 
