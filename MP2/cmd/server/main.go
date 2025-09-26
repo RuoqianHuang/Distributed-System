@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cs425/mp2/internal/flow"
 	"cs425/mp2/internal/gossip"
 	"cs425/mp2/internal/member"
 	"cs425/mp2/internal/swim"
@@ -42,6 +43,8 @@ type Server struct {
 	swim         *swim.Swim         // swim instance
 	state        ServerState        // server's state
 	lock         sync.RWMutex       // mutex for server's property
+	InFlow       flow.FlowCounter   // input network counter
+	OutFlow      flow.FlowCounter   // output network counter
 }
 
 // arguments for cli tool
@@ -51,24 +54,24 @@ type Args struct {
 
 func (s *Server) CLI(args Args, reply *string) error {
 	// for CLI tool
-	log.Printf("received cli command: %s", args.Command)
+	// log.Printf("received cli command: %s", args.Command)
 
 	switch args.Command {
-	case "switch_gossip":
+	case "gossip":
 		s.switchToGossip()
 		*reply = "Switched to Gossip protocol"
-	case "switch_swim":
+	case "swim":
 		s.switchToSwim()
 		*reply = "Switched to SWIM protocol"
 	case "status":
 		s.lock.RLock()
 		state := s.state
 		s.lock.RUnlock()
-		*reply = fmt.Sprintf("Current protocol: %s", s.getStateString(state))
-	case "membership":
-		*reply = s.membership.Table()
+		*reply = fmt.Sprintf("Current protocol: %s, Input: %f bytes/s, Output %f bytes/s", s.getStateString(state), s.InFlow.Get(), s.OutFlow.Get())
+		*reply = *reply + "\n" + s.membership.Table()
+
 	default:
-		*reply = "Unknown command. Available commands: switch_gossip, switch_swim, status, membership"
+		*reply = "Unknown command. Available commands: gossip, swim, info"
 	}
 	return nil
 }
@@ -135,10 +138,11 @@ func (s *Server) sendSwitchMessage(messageType utils.MessageType, excludeHostnam
 				TargetInfo: info,
 				InfoMap:    infoMap,
 			}
-			err := utils.SendMessage(switchMessage, info.Hostname, info.Port)
+			size, err := utils.SendMessage(switchMessage, info.Hostname, info.Port)
 			if err != nil {
 				log.Printf("Failed to send switch message to %s: %s", info.String(), err.Error())
 			} else {
+				s.OutFlow.Add(size)
 				log.Printf("Sent switch message to %s", info.String())
 			}
 		}
@@ -199,20 +203,23 @@ func (s *Server) joinGroup() {
 		InfoMap:    s.membership.GetInfoMap(),
 	}
 	for _, hostname := range utils.HOSTS {
-		err := utils.SendMessage(message, hostname, utils.DEFAULT_PORT)
+		size, err := utils.SendMessage(message, hostname, utils.DEFAULT_PORT)
 		if err != nil {
 			log.Printf("Failed to send probe message to %s:%d: %s", hostname, utils.DEFAULT_PORT, err.Error())
+		} else {
+			s.OutFlow.Add(size)
 		}
 	}
 	// wait for probe ack
 	buffer := make([]byte, 4096)
 	for {
-		_, _, err := conn.ReadFromUDP(buffer)
+		size, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			log.Printf("Failed to get probe ack, starting the group alone with gossip mode")
 			s.state = Gossip
 			break
 		}
+		s.InFlow.Add(int64(size))
 		message, err := utils.Deserialize(buffer)
 		if err != nil {
 			log.Printf("Failed to deserialize message: %s", err.Error())
@@ -246,20 +253,23 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 
 	data := make([]byte, 4096)
 	for {
-		_, _, err := conn.ReadFromUDP(data)
+		size, _, err := conn.ReadFromUDP(data)
 		if err != nil {
 			log.Printf("UDP Read error: %s", err.Error())
 			continue
 		}
+		s.InFlow.Add(int64(size))
 		message, err := utils.Deserialize(data)
 		if err != nil {
 			log.Printf("Failed to deserialize message: %s", err.Error())
 		} else {
-			if message.Type == utils.Gossip {
+			switch message.Type {
+			case utils.Gossip:
 				s.gossip.HandleIncomingMessage(message)
-			} else if message.Type == utils.Ping || message.Type == utils.Pong || message.Type == utils.PingReq {
-				s.swim.HandleIncomingMessage(message, s.Info)
-			} else if message.Type == utils.Probe {
+			case utils.Ping, utils.Pong, utils.PingReq:
+				size := s.swim.HandleIncomingMessage(message, s.Info)
+				s.OutFlow.Add(size)
+			case utils.Probe:
 				// someone want to join the group, send some information back
 				log.Printf("Receive probe message: %v", message)
 				s.membership.Merge(message.InfoMap, time.Now()) // merge new member
@@ -275,16 +285,17 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 					TargetInfo: message.SenderInfo,
 					InfoMap:    s.membership.GetInfoMap(),
 				}
-				err := utils.SendMessage(ackMessage, message.SenderInfo.Hostname, message.SenderInfo.Port)
+				size, err := utils.SendMessage(ackMessage, message.SenderInfo.Hostname, message.SenderInfo.Port)
 				if err != nil {
 					log.Printf("Failed to send probe ack message to %s: %s", message.SenderInfo.String(), err.Error())
 				} else {
+					s.OutFlow.Add(size)
 					log.Printf("Welcome, send probe ack message to %s:%d: %v", message.SenderInfo.Hostname, message.SenderInfo.Port, ackMessage)
 				}
-			} else if message.Type == utils.UseSwim || message.Type == utils.UseGossip {
+			case utils.UseSwim, utils.UseGossip:
 				// Handle algorithm switch messages
 				s.handleSwitchMessage(message)
-			} else {
+			default:
 				// ignore probe ack, since the node should already join the group
 			}
 		}
@@ -302,9 +313,11 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 	for range ticker.C {
 		switch s.state {
 		case Swim:
-			s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup)
+			size := s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup)
+			s.OutFlow.Add(size)
 		case Gossip:
-			s.gossip.GossipStep(s.Id, s.Tfail, s.Tsuspect, s.Tcleanup)
+			size := s.gossip.GossipStep(s.Id, s.Tfail, s.Tsuspect, s.Tcleanup)
+			s.OutFlow.Add(size)
 		}
 		// TODO: change period
 	}

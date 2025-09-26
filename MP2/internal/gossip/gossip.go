@@ -23,7 +23,7 @@ func (g *Gossip) GossipStep(
 	myId uint64,
 	Tfail time.Duration,
 	Tsuspect time.Duration,
-	Tcleanup time.Duration) {
+	Tcleanup time.Duration) int64 {
 	currentTime := time.Now()
 
 	// increase heartbeat counter
@@ -51,8 +51,14 @@ func (g *Gossip) GossipStep(
 			Type:    utils.Gossip,
 			InfoMap: infoMap,
 		}
-		utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
+		n, err := utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
+		if err != nil {
+			log.Printf("failed to send gossip message to %s:%d: %s", targetInfo.Hostname, targetInfo.Port, err.Error())
+		} else {
+			return n
+		}
 	}
+	return 0
 }
 
 func NewGossip(membership *member.Membership) *Gossip {

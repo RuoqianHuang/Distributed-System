@@ -188,7 +188,7 @@ func (m *Membership) Table() string {
 	for _, i := range infoList {
 		info := m.InfoMap[i.Id]
 		lengths := map[string]int{
-			"Id": len(fmt.Sprint("%d", i.Id)),
+			"Id": len(fmt.Sprintf("%d", i.Id)),
 			"Hostname": len(i.Hostname),
 			"Port": len(fmt.Sprintf("%d", i.Port)),
 			"Version": len(info.Version.Format(time.RFC3339Nano)),
@@ -266,7 +266,7 @@ func (m *Membership) GetTarget() (Info, error) {
 	defer m.lock.Unlock()
 	targetInfo, ok := m.InfoMap[m.Members[m.roundRobinIndex]]
 	if !ok {
-		return Info{}, fmt.Errorf("inconsistent membership!!!")
+		return Info{}, fmt.Errorf("inconsistent membership")
 	}
 	m.roundRobinIndex++
 	if m.roundRobinIndex == len(m.Members) {

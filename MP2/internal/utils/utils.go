@@ -80,29 +80,29 @@ func Deserialize(data []byte) (Message, error) {
 	return result, nil
 }
 
-func SendMessage(message Message, hostname string, port int) error {
+func SendMessage(message Message, hostname string, port int) (int64, error) {
 	address := fmt.Sprintf("%s:%d", hostname, port)
 	udpAddress, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
-		return fmt.Errorf("error resolving UDP address: %s", err.Error())
+		return 0, fmt.Errorf("error resolving UDP address: %s", err.Error())
 	}
 	//  establist a udp connection
 	conn, err := net.DialUDP("udp", nil, udpAddress)
 	if err != nil {
-		return fmt.Errorf("error creating udp connection: %s", err.Error())
+		return 0, fmt.Errorf("error creating udp connection: %s", err.Error())
 	}
 	defer conn.Close()
 
 	// serialize
 	serializedMessage, err := Serialize(message)
 	if err != nil {
-		return fmt.Errorf("error serializing message: %s", err.Error())
+		return 0, fmt.Errorf("error serializing message: %s", err.Error())
 	}
-
+	numOfBytes := len(serializedMessage)
 	// send the message
 	_, err = conn.Write(serializedMessage)
 	if err != nil {
-		return fmt.Errorf("error sending data: %s", err.Error())
+		return 0, fmt.Errorf("error sending data: %s", err.Error())
 	}
-	return nil
+	return int64(numOfBytes), nil
 }
