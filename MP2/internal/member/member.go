@@ -82,17 +82,31 @@ func (m *Membership) Merge(memberInfo map[uint64]Info, currentTime time.Time) bo
 	return memberChanged
 }
 
-func (m *Membership) UpdateStateGossip(currentTime time.Time, Tfail time.Duration, Tsuspect time.Duration) bool {
+func (m *Membership) UpdateStateGossip(currentTime time.Time, Tfail time.Duration, Tsuspect time.Duration, suspicionEnabled bool) bool {
 	// check member states based on timestamps and thresholds
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	anyFailed := false
 	for id, info := range m.InfoMap {
 		elapsed := currentTime.Sub(info.Timestamp)
+		oldState := info.State
 		if info.State == Alive && elapsed > Tsuspect {
-			info.State = Suspected
-			info.Timestamp = currentTime
-			m.InfoMap[id] = info
+			if suspicionEnabled {
+				info.State = Suspected
+				info.Timestamp = currentTime
+				m.InfoMap[id] = info
+				
+				if oldState != Suspected {
+					fmt.Printf("SUSPECTED: Node %d (%s:%d) is now suspected\n", 
+						id, info.Hostname, info.Port)
+				}
+			} else {
+				// Skip suspicion, go directly to failed
+				info.State = Failed
+				info.Timestamp = currentTime
+				m.InfoMap[id] = info
+				anyFailed = true
+			}
 		} else if info.State == Suspected && elapsed > Tfail {
 			info.State = Failed
 			info.Timestamp = currentTime
@@ -113,15 +127,28 @@ func (m *Membership) UpdateStateGossip(currentTime time.Time, Tfail time.Duratio
 	return anyFailed
 }
 
-func (m *Membership) UpdateStateSwim(currentTime time.Time, id uint64, state MemberState) bool {
+func (m *Membership) UpdateStateSwim(currentTime time.Time, id uint64, state MemberState, suspicionEnabled bool) bool {
 	// update state for a specific id, return true if any member beceom Failed.
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	info, ok := m.InfoMap[id]
 	if ok && info.State != Failed {
+		oldState := info.State
 		info.Timestamp = currentTime
-		info.State = state
+		
+		if state == Suspected && !suspicionEnabled {
+			// Skip suspicion, go directly to failed
+			info.State = Failed
+		} else {
+			info.State = state
+		}
 		m.InfoMap[id] = info
+		
+		if info.State == Suspected && oldState != Suspected && suspicionEnabled {
+			fmt.Printf("SUSPECTED: Node %d (%s:%d) is now suspected\n", 
+				id, info.Hostname, info.Port)
+		}
+		
 		return state == Failed
 	}
 	return false
@@ -209,6 +236,62 @@ func (m *Membership) Table() string {
 	}
 
 	res := strings.Repeat("-", totalLength) + "\n"
+	
+	// Add column headers
+	header := "| "
+	
+	// ID header
+	s := "ID"
+	if len(s) < maxLengths["Id"] {
+		s = s + strings.Repeat(" ", maxLengths["Id"] - len(s))
+	}
+	header = header + s + " | "
+	
+	// Hostname header
+	s = "Hostname"
+	if len(s) < maxLengths["Hostname"] {
+		s = s + strings.Repeat(" ", maxLengths["Hostname"] - len(s))
+	}
+	header = header + s + " | "
+	
+	// Port header
+	s = "Port"
+	if len(s) < maxLengths["Port"] {
+		s = s + strings.Repeat(" ", maxLengths["Port"] - len(s))
+	}
+	header = header + s + " | "
+	
+	// Version header
+	s = "Version"
+	if len(s) < maxLengths["Version"] {
+		s = s + strings.Repeat(" ", maxLengths["Version"] - len(s))
+	}
+	header = header + s + " | "
+	
+	// Timestamp header
+	s = "Timestamp"
+	if len(s) < maxLengths["Timestamp"] {
+		s = s + strings.Repeat(" ", maxLengths["Timestamp"] - len(s))
+	}
+	header = header + s + " | "
+	
+	// Counter header
+	s = "Counter"
+	if len(s) < maxLengths["Counter"] {
+		s = s + strings.Repeat(" ", maxLengths["Counter"] - len(s))
+	}
+	header = header + s + " | "
+	
+	// State header
+	s = "State"
+	if len(s) < maxLengths["State"] {
+		s = s + strings.Repeat(" ", maxLengths["State"] - len(s))
+	}
+	header = header + s + " |"
+	
+	res = res + header + "\n"
+	res = res + strings.Repeat("-", totalLength) + "\n"
+	
 	for _, i := range infoList {
 		info := m.InfoMap[i.Id]
 		line := "| "

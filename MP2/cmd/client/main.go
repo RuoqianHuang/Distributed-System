@@ -55,7 +55,8 @@ func CallWithTimeout(
 func main() {
 	if len(os.Args) < 3 {
 		log.Println("Usage: ./client <Query> <Hostname> -p <Port>")
-		log.Println("Example: ./client member fa25-cs425-b601.cs.illinois.edu")
+		log.Println("Example: ./client list_mem fa25-cs425-b601.cs.illinois.edu")
+		log.Println("Available commands: list_mem, list_self, join, leave, display_suspects, display_protocol, switch(protocol, suspicion)")
 	}
 
 	port := 12345
@@ -69,7 +70,7 @@ func main() {
 			if (i + 1) >= len(os.Args) {
 				log.Fatal("Error: -p port requires a port number.")
 			}
-			num, err := strconv.Atoi(os.Args[i])
+			num, err := strconv.Atoi(os.Args[i+1])
 			port = num
 			if err != nil {
 				log.Fatal("Invalid port number!")

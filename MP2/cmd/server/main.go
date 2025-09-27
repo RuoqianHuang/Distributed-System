@@ -12,6 +12,7 @@ import (
 	"net/rpc"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -42,6 +43,7 @@ type Server struct {
 	gossip       *gossip.Gossip     // gossip instance
 	swim         *swim.Swim         // swim instance
 	state        ServerState        // server's state
+	suspicionMode bool              // whether suspicion mechanism is enabled
 	lock         sync.RWMutex       // mutex for server's property
 	InFlow       flow.FlowCounter   // input network counter
 	OutFlow      flow.FlowCounter   // output network counter
@@ -69,9 +71,39 @@ func (s *Server) CLI(args Args, reply *string) error {
 		s.lock.RUnlock()
 		*reply = fmt.Sprintf("Current protocol: %s, Input: %f bytes/s, Output %f bytes/s", s.getStateString(state), s.InFlow.Get(), s.OutFlow.Get())
 		*reply = *reply + "\n" + s.membership.Table()
-
+	case "list_mem":
+		*reply = s.membership.Table()
+	case "list_self":
+		*reply = fmt.Sprintf("Self ID: %d, Hostname: %s, Port: %d", s.Id, s.Info.Hostname, s.Info.Port)
+	case "join":
+		// Join is implicit on startup, but we can provide status
+		*reply = "Already joined the group. Use 'list_mem' to see membership."
+	case "leave":
+		s.leaveGroup()
+		*reply = "Left the group voluntarily"
+	case "display_suspects":
+		*reply = s.getSuspectedNodes()
+	case "display_protocol":
+		s.lock.RLock()
+		state := s.state
+		suspicionMode := s.suspicionMode
+		s.lock.RUnlock()
+		protocol := "gossip"
+		if state == Swim {
+			protocol = "ping"
+		}
+		suspicion := "nosuspect"
+		if suspicionMode {
+			suspicion = "suspect"
+		}
+		*reply = fmt.Sprintf("<%s, %s>", protocol, suspicion)
 	default:
-		*reply = "Unknown command. Available commands: gossip, swim, info"
+		// Check for switch command with parameters
+		if len(args.Command) > 6 && args.Command[:6] == "switch" {
+			*reply = s.handleSwitchCommand(args.Command)
+		} else {
+			*reply = "Unknown command. Available commands: gossip, swim, status, list_mem, list_self, join, leave, display_suspects, display_protocol, switch(protocol, suspicion)"
+		}
 	}
 	return nil
 }
@@ -89,6 +121,119 @@ func (s *Server) getStateString(state ServerState) string {
 	default:
 		return "Unknown"
 	}
+}
+
+func (s *Server) leaveGroup() {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	
+	// Notify all members about voluntary leave
+	infoMap := s.membership.GetInfoMap()
+	for _, info := range infoMap {
+		if info.State == member.Alive && info.Hostname != s.Info.Hostname {
+			leaveMessage := utils.Message{
+				Type:       utils.Gossip, // Use gossip to propagate leave
+				SenderInfo: s.Info,
+				TargetInfo: info,
+				InfoMap:    map[uint64]member.Info{
+					s.Id: {
+						Hostname:  s.Info.Hostname,
+						Port:      s.Info.Port,
+						Version:   s.Info.Version,
+						Timestamp: time.Now(),
+						Counter:   s.Info.Counter,
+						State:     member.Failed, // Mark as failed for leave
+					},
+				},
+			}
+			utils.SendMessage(leaveMessage, info.Hostname, info.Port)
+		}
+	}
+	
+	// Update local state
+	s.state = Failed
+	log.Printf("Voluntarily left the group")
+}
+
+func (s *Server) getSuspectedNodes() string {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	
+	infoMap := s.membership.GetInfoMap()
+	suspected := []string{}
+	
+	for _, info := range infoMap {
+		if info.State == member.Suspected {
+			suspected = append(suspected, fmt.Sprintf("ID: %d, Hostname: %s, Port: %d", 
+				member.HashInfo(info), info.Hostname, info.Port))
+		}
+	}
+	
+	if len(suspected) == 0 {
+		return "No suspected nodes"
+	}
+	
+	result := "Suspected nodes:\n"
+	for _, node := range suspected {
+		result += node + "\n"
+	}
+	return result
+}
+
+func (s *Server) handleSwitchCommand(command string) string {
+	// Parse switch(protocol, suspicion) command
+	// Expected format: switch(gossip,suspect) or switch(ping,nosuspect)
+	
+	// Remove "switch(" and ")"
+	if len(command) < 8 || command[:6] != "switch" {
+		return "Invalid switch command format. Use: switch(protocol, suspicion)"
+	}
+	
+	// Find the parameters inside parentheses
+	start := 6
+	if command[start] != '(' {
+		return "Invalid switch command format. Use: switch(protocol, suspicion)"
+	}
+	
+	end := len(command) - 1
+	if command[end] != ')' {
+		return "Invalid switch command format. Use: switch(protocol, suspicion)"
+	}
+	
+	params := command[start+1:end]
+	parts := strings.Split(params, ",")
+	if len(parts) != 2 {
+		return "Invalid switch command format. Use: switch(protocol, suspicion)"
+	}
+	
+	protocol := strings.TrimSpace(parts[0])
+	suspicion := strings.TrimSpace(parts[1])
+	
+	// Switch protocol and suspicion mode
+	s.lock.Lock()
+	if protocol == "gossip" {
+		s.state = Gossip
+		s.sendSwitchMessage(utils.UseGossip, "")
+	} else if protocol == "ping" {
+		s.state = Swim
+		s.sendSwitchMessage(utils.UseSwim, "")
+	} else {
+		s.lock.Unlock()
+		return "Invalid protocol. Use 'gossip' or 'ping'"
+	}
+	
+	// Switch suspicion mode
+	if suspicion == "suspect" {
+		s.suspicionMode = true
+	} else if suspicion == "nosuspect" {
+		s.suspicionMode = false
+	} else {
+		s.lock.Unlock()
+		return "Invalid suspicion mode. Use 'suspect' or 'nosuspect'"
+	}
+	s.lock.Unlock()
+	
+	return fmt.Sprintf("Switched to %s protocol with %s suspicion", protocol, suspicion)
 }
 
 func (s *Server) switchToGossip() {
@@ -311,12 +456,16 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 
 	// The main event loop
 	for range ticker.C {
+		s.lock.RLock()
+		suspicionMode := s.suspicionMode
+		s.lock.RUnlock()
+		
 		switch s.state {
 		case Swim:
-			size := s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup)
+			size := s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup, suspicionMode)
 			s.OutFlow.Add(size)
 		case Gossip:
-			size := s.gossip.GossipStep(s.Id, s.Tfail, s.Tsuspect, s.Tcleanup)
+			size := s.gossip.GossipStep(s.Id, s.Tfail, s.Tsuspect, s.Tcleanup, suspicionMode)
 			s.OutFlow.Add(size)
 		}
 		// TODO: change period
@@ -422,6 +571,7 @@ func main() {
 		gossip:       myGossip,
 		swim:         mySwim,
 		state:        Init,
+		suspicionMode: true, // suspicion enabled by default
 	}
 
 	// register rpc server for CLI function

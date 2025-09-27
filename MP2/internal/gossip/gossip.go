@@ -23,7 +23,8 @@ func (g *Gossip) GossipStep(
 	myId uint64,
 	Tfail time.Duration,
 	Tsuspect time.Duration,
-	Tcleanup time.Duration) int64 {
+	Tcleanup time.Duration,
+	suspicionEnabled bool) int64 {
 	currentTime := time.Now()
 
 	// increase heartbeat counter
@@ -33,7 +34,7 @@ func (g *Gossip) GossipStep(
 	}
 
 	// update state
-	g.Membership.UpdateStateGossip(currentTime, Tfail, Tsuspect)
+	g.Membership.UpdateStateGossip(currentTime, Tfail, Tsuspect, suspicionEnabled)
 
 	// cleanup
 	g.Membership.Cleanup(currentTime, Tcleanup)

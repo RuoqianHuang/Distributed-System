@@ -130,7 +130,8 @@ func (s *Swim) SwimStep(
 	k int,
 	TpingFail time.Duration,
 	TpingReqFail time.Duration,
-	Tcleanup time.Duration) int64 {
+	Tcleanup time.Duration,
+	suspicionEnabled bool) int64 {
 	currentTime := time.Now()
 	// increase heartbeat counter; here it acts as an incarnation number
 	err := s.Membership.Heartbeat(myId, currentTime)
@@ -148,12 +149,12 @@ func (s *Swim) SwimStep(
 		if currentTime.Sub(info.Timestamp) > TpingReqFail {
 			switch info.State {
 			case member.Alive: // update its state to suspect
-				s.Membership.UpdateStateSwim(currentTime, id, member.Suspected)
+				s.Membership.UpdateStateSwim(currentTime, id, member.Suspected, suspicionEnabled)
 				info.Timestamp = currentTime
 				info.State = member.Suspected
 				s.waitAcksIndirect[id] = info
 			case member.Suspected: // node failed, update its state and remove it from waitAcksIndirect
-				s.Membership.UpdateStateSwim(currentTime, id, member.Failed)
+				s.Membership.UpdateStateSwim(currentTime, id, member.Failed, suspicionEnabled)
 				delete(s.waitAcksIndirect, id)
 			}
 		}
