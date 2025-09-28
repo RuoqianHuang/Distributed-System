@@ -4,6 +4,7 @@ import (
 	"cs425/mp2/internal/member"
 	"cs425/mp2/internal/utils"
 	"log"
+	"os"
 	"time"
 )
 
@@ -31,6 +32,7 @@ func (g *Gossip) GossipStep(
 	err := g.Membership.Heartbeat(myId, currentTime)
 	if err != nil {
 		log.Printf("Failed to heartbeat: %s", err.Error())
+		os.Exit(1) // auto restart
 	}
 
 	// update state
@@ -43,6 +45,7 @@ func (g *Gossip) GossipStep(
 	targetInfo, err := g.Membership.GetTarget()
 	if err != nil {
 		log.Printf("Failed to get target info: %s", err.Error())
+		os.Exit(1) // auto restart
 	} else {
 		// copy member info map to send
 		infoMap := g.Membership.GetInfoMap()

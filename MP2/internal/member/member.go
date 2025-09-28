@@ -53,6 +53,9 @@ func (m *Membership) Merge(memberInfo map[uint64]Info, currentTime time.Time) bo
 	defer m.lock.Unlock()
 	memberChanged := false
 	for id, info := range memberInfo {
+		if info.Port == 0 || info.Hostname == "" {
+			continue
+		}
 		if member, ok := m.InfoMap[id]; ok {
 			if info.State == Failed {
 				if member.State != Failed {

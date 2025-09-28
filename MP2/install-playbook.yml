@@ -24,9 +24,9 @@
     remote_user: "{{ lookup('env', 'USER') }}"
   
   tasks:
-    - name: "Wait for 10 seconds before deploying to other nodes"
+    - name: "Wait for 5 seconds before deploying to other nodes"
       pause:
-        seconds: 10
+        seconds: 5
 
     - name: "Run deployment tasks on the remaining nodes"
       include_tasks: task_deploy.yml

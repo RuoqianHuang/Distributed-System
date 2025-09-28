@@ -8,7 +8,7 @@ User={{ remote_user }}
 Group={{ remote_user }}
 WorkingDirectory=/cs425/mp2
 Restart=on-failure
-RestartSec=5s
+RestartSec=1s
 
 {% set machine_number = inventory_hostname | regex_replace('.*b6(\\d+).*', '\\1') %}
 StandardOutput=append:/cs425/mp2/vm{{ machine_number }}.log

@@ -28,39 +28,47 @@ const (
 	Init
 )
 
-const ProbeTimeout time.Duration = 5 * time.Second
+const ProbeTimeout time.Duration = 2 * time.Second
 
 type Server struct {
-	Tround       time.Duration      // Duration of a round
-	Tsuspect     time.Duration      // suspect time for gossip
-	Tfail        time.Duration      // fail time for gossip
-	TpingFail    time.Duration      // direct ping fail time for swim
-	TpingReqFail time.Duration      // indirect ping fail time for swim
-	Tcleanup     time.Duration      // time to cleanup failed member's information
-	Id           uint64             // node's ID
-	K            int                // k for swim
-	Info         member.Info        // node's own information
-	membership   *member.Membership // member ship information
-	gossip       *gossip.Gossip     // gossip instance
-	swim         *swim.Swim         // swim instance
-	state        ServerState        // server's state
-	suspicionMode bool              // whether suspicion mechanism is enabled
-	dropRate     float64            // message drop rate (0.0 to 1.0)
-	lock         sync.RWMutex       // mutex for server's property
-	InFlow       flow.FlowCounter   // input network counter
-	OutFlow      flow.FlowCounter   // output network counter
+	Tround        time.Duration      // Duration of a round
+	Tsuspect      time.Duration      // suspect time for gossip
+	Tfail         time.Duration      // fail time for gossip
+	TpingFail     time.Duration      // direct ping fail time for swim
+	TpingReqFail  time.Duration      // indirect ping fail time for swim
+	Tcleanup      time.Duration      // time to cleanup failed member's information
+	Id            uint64             // node's ID
+	K             int                // k for swim
+	Info          member.Info        // node's own information
+	membership    *member.Membership // member ship information
+	gossip        *gossip.Gossip     // gossip instance
+	swim          *swim.Swim         // swim instance
+	state         ServerState        // server's state
+	suspicionMode bool               // whether suspicion mechanism is enabled
+	dropRate      float64            // message drop rate (0.0 to 1.0)
+	lock          sync.RWMutex       // mutex for server's property
+	InFlow        flow.FlowCounter   // input network counter
+	OutFlow       flow.FlowCounter   // output network counter
 }
 
 // arguments for cli tool
 type Args struct {
 	Command string
-	Rate float64
+	Rate    float64
 }
 
 func (s *Server) MemberTable(args Args, reply *map[uint64]member.Info) error {
 	res := s.membership.GetInfoMap()
-	reply = &res
+	*reply = res
 	return nil
+}
+
+func getHostName() string {
+	name, err := os.Hostname()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return name
 }
 
 func (s *Server) CLI(args Args, reply *string) error {
@@ -80,17 +88,15 @@ func (s *Server) CLI(args Args, reply *string) error {
 		s.lock.RUnlock()
 		*reply = fmt.Sprintf("Current protocol: %s, Input: %f bytes/s, Output %f bytes/s\n", s.getStateString(state), s.InFlow.Get(), s.OutFlow.Get())
 		*reply = *reply + s.membership.Table()
-	case "list":
+	case "list_mem":
 		*reply = "\n" + s.membership.Table()
-	case "self":
+	case "list_self":
 		*reply = fmt.Sprintf("Self ID: %d, Hostname: %s, Port: %d", s.Id, s.Info.Hostname, s.Info.Port)
-	case "rejoin":
-		// Join is implicit on startup, but we can provide status
-		s.lock.RLock()
-		// try to rejoin group with a new version 
-		s.membership.Reset(time.Now(), s.Info.Hostname, s.Info.Port)
-		s.joinGroup()
-		s.lock.RUnlock()
+	case "join":
+		*reply = "Already in group"
+	case "stop":
+		*reply = "Stopping the server"
+		defer os.Exit(1)
 	case "leave":
 		s.leaveGroup()
 		*reply = "Left the group voluntarily"
@@ -141,7 +147,7 @@ func (s *Server) getStateString(state ServerState) string {
 func (s *Server) leaveGroup() {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	
+
 	// Notify all members about voluntary leave
 	infoMap := s.membership.GetInfoMap()
 	for _, info := range infoMap {
@@ -155,7 +161,7 @@ func (s *Server) leaveGroup() {
 			utils.SendMessage(leaveMessage, info.Hostname, info.Port)
 		}
 	}
-	
+
 	// Update local state
 	s.state = Failed
 	log.Printf("Voluntarily left the group")
@@ -164,18 +170,18 @@ func (s *Server) leaveGroup() {
 func (s *Server) getSuspectedNodes() string {
 	infoMap := s.membership.GetInfoMap()
 	suspected := []string{}
-	
+
 	for _, info := range infoMap {
 		if info.State == member.Suspected {
-			suspected = append(suspected, fmt.Sprintf("ID: %d, Hostname: %s, Port: %d", 
+			suspected = append(suspected, fmt.Sprintf("ID: %d, Hostname: %s, Port: %d",
 				member.HashInfo(info), info.Hostname, info.Port))
 		}
 	}
-	
+
 	if len(suspected) == 0 {
 		return "No suspected nodes"
 	}
-	
+
 	result := "Suspected nodes:\n"
 	for _, node := range suspected {
 		result += node + "\n"
@@ -186,32 +192,32 @@ func (s *Server) getSuspectedNodes() string {
 func (s *Server) handleSwitchCommand(command string) string {
 	// Parse switch(protocol, suspicion) command
 	// Expected format: switch(gossip,suspect) or switch(ping,nosuspect)
-	
+
 	// Remove "switch(" and ")"
 	if len(command) < 8 || command[:6] != "switch" {
 		return "Invalid switch command format. Use: switch(protocol, suspicion)"
 	}
-	
+
 	// Find the parameters inside parentheses
 	start := 6
 	if command[start] != '(' {
 		return "Invalid switch command format. Use: switch(protocol, suspicion)"
 	}
-	
+
 	end := len(command) - 1
 	if command[end] != ')' {
 		return "Invalid switch command format. Use: switch(protocol, suspicion)"
 	}
-	
-	params := command[start+1:end]
+
+	params := command[start+1 : end]
 	parts := strings.Split(params, ",")
 	if len(parts) != 2 {
 		return "Invalid switch command format. Use: switch(protocol, suspicion)"
 	}
-	
+
 	protocol := strings.TrimSpace(parts[0])
 	suspicion := strings.TrimSpace(parts[1])
-	
+
 	// Switch protocol and suspicion mode
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -225,7 +231,7 @@ func (s *Server) handleSwitchCommand(command string) string {
 	default:
 		return "Invalid protocol. Use 'gossip' or 'ping'"
 	}
-	
+
 	// Switch suspicion mode
 	switch suspicion {
 	case "suspect":
@@ -235,7 +241,7 @@ func (s *Server) handleSwitchCommand(command string) string {
 	default:
 		return "Invalid suspicion mode. Use 'suspect' or 'nosuspect'"
 	}
-	
+
 	log.Printf("Switched to %s protocol with %s suspicion", protocol, suspicion)
 	return fmt.Sprintf("Switched to %s protocol with %s suspicion", protocol, suspicion)
 }
@@ -244,7 +250,7 @@ func (s *Server) handleDropRateCommand(args Args) string {
 	if args.Rate < 0.0 || args.Rate > 1.0 {
 		return "Drop rate must be between 0.0 and 1.0"
 	}
-	
+
 	s.lock.Lock()
 	s.dropRate = args.Rate
 	s.lock.Unlock()
@@ -303,7 +309,7 @@ func (s *Server) sendSwitchMessage(messageType utils.MessageType, excludeHostnam
 			if err != nil {
 				log.Printf("Failed to send switch message to %s: %s", info.String(), err.Error())
 			} else {
-				// s.OutFlow.Add(size) // only count 
+				// s.OutFlow.Add(size) // only count
 				log.Printf("Sent switch message to %s", info.String())
 			}
 		}
@@ -341,9 +347,15 @@ func (s *Server) handleSwitchMessage(message utils.Message) {
 	}
 }
 
-func (s *Server) joinGroup() {
+func (s *Server) joinGroup() { // the init join
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	if getHostName() == utils.HOSTS[0] {
+		log.Printf("I am introducer. Starting with gossip")
+		s.state = Gossip
+		return
+	}
 
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", s.Info.Port))
 	if err != nil {
@@ -363,7 +375,7 @@ func (s *Server) joinGroup() {
 		SenderInfo: s.Info,
 		InfoMap:    s.membership.GetInfoMap(),
 	}
-	for _, hostname := range utils.HOSTS {
+	for _, hostname := range utils.HOSTS[:1] { // use first node as a introducer
 		_, err := utils.SendMessage(message, hostname, utils.DEFAULT_PORT)
 		if err != nil {
 			log.Printf("Failed to send probe message to %s:%d: %s", hostname, utils.DEFAULT_PORT, err.Error())
@@ -376,9 +388,10 @@ func (s *Server) joinGroup() {
 	for {
 		_, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
-			log.Printf("Failed to get probe ack, starting the group alone with gossip mode")
-			s.state = Gossip
-			break
+			log.Printf("Failed to get probe ack, stopping")
+			os.Exit(1)
+			// s.state = Gossip
+			// break
 		}
 		// s.InFlow.Add(int64(size))
 		message, err := utils.Deserialize(buffer)
@@ -419,24 +432,30 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 			log.Printf("UDP Read error: %s", err.Error())
 			continue
 		}
-		
+		// ignore all message when failed or leave group
+		s.lock.RLock()
+		currentState := s.state
+		s.lock.RUnlock()
+		if currentState == Failed {
+			continue
+		}
 		message, err := utils.Deserialize(data)
 		if err != nil {
 			log.Printf("Failed to deserialize message: %s", err.Error())
 		} else {
 			switch message.Type {
 			case utils.Gossip, utils.Ping, utils.PingReq, utils.Pong:
-				// only apply message drop and flow counter to protocol messages 
+				// only apply message drop and flow counter to protocol messages
 				s.lock.RLock()
 				dropRate := s.dropRate
 				s.lock.RUnlock()
-				
+
 				if dropRate > 0 && rand.Float64() < dropRate {
 					// log.Printf("Dropping message (drop rate: %.2f)", dropRate)
 					continue
 				}
 				s.InFlow.Add(int64(size))
-				
+
 				switch message.Type {
 				case utils.Gossip:
 					s.gossip.HandleIncomingMessage(message)
@@ -451,7 +470,7 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 				log.Printf("Node %s voluntarily left the group", message.SenderInfo.String())
 			case utils.Probe:
 				// someone want to join the group, send some information back
-				log.Printf("Receive probe message from: %s:%d", message)
+				log.Printf("Receive probe message from: %s:%d", message.SenderInfo.Hostname, message.SenderInfo.Port)
 				s.membership.Merge(message.InfoMap, time.Now()) // merge new member
 				messageType := utils.ProbeAckGossip
 				s.lock.RLock()
@@ -494,7 +513,13 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 		s.lock.RLock()
 		suspicionMode := s.suspicionMode
 		s.lock.RUnlock()
-		
+
+		infoMap := s.membership.GetInfoMap()
+		if len(infoMap) == 1 && getHostName() != utils.HOSTS[0] {
+			log.Printf("The node might failed, restarting")
+			os.Exit(1)
+		}
+
 		switch s.state {
 		case Swim:
 			size := s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup, suspicionMode)
@@ -534,11 +559,11 @@ func main() {
 	cliPort := 12345
 	serverPort := utils.DEFAULT_PORT
 	Tround := time.Second / 10
-	Tsuspect := Tround * 5
-	Tfail := Tround * 5
-	Tcleanup := Tround * 10
-	TpingFail := Tround * 5
-	TpingReqFail := Tround * 5
+	Tsuspect := Tround * 15
+	Tfail := Tround * 15
+	Tcleanup := Tround * 100 // don't cleanup too fast, I need this to record FP rate
+	TpingFail := Tround * 10
+	TpingReqFail := Tround * 10
 
 	// parse command line arguments
 	if len(os.Args) >= 2 {
@@ -593,21 +618,21 @@ func main() {
 	mySwim := swim.NewSwim(&membership)
 	// create server instance
 	myServer := Server{
-		Tround:       Tround,
-		Tsuspect:     Tsuspect,
-		Tfail:        Tfail,
-		TpingFail:    TpingFail,
-		TpingReqFail: TpingReqFail,
-		Tcleanup:     Tcleanup,
-		Id:           myId,
-		K:            3, // ping req to 3 other member
-		Info:         myInfo,
-		membership:   &membership,
-		gossip:       myGossip,
-		swim:         mySwim,
-		state:        Init,
+		Tround:        Tround,
+		Tsuspect:      Tsuspect,
+		Tfail:         Tfail,
+		TpingFail:     TpingFail,
+		TpingReqFail:  TpingReqFail,
+		Tcleanup:      Tcleanup,
+		Id:            myId,
+		K:             3, // ping req to 3 other member
+		Info:          myInfo,
+		membership:    &membership,
+		gossip:        myGossip,
+		swim:          mySwim,
+		state:         Init,
 		suspicionMode: true, // suspicion enabled by default
-		dropRate:     0.0,   // no message dropping by default
+		dropRate:      0.0,  // no message dropping by default
 	}
 
 	// register rpc server for CLI function

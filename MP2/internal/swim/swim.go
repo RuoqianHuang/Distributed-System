@@ -4,6 +4,7 @@ import (
 	"cs425/mp2/internal/member"
 	"cs425/mp2/internal/utils"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -49,7 +50,6 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 		requesterId := member.HashInfo(message.RequesterInfo)
 		if requesterId == targetId { // my ack
 			s.lock.Lock()
-			defer s.lock.Unlock()
 			// log.Printf("Receive ping ack message from %s", message.SenderInfo.String())
 			// direct ack
 			_, ok := s.waitAcksDirect[senderId]
@@ -63,6 +63,7 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 				// delete senderId from the map, don't need extra update to the member info, since the info is already merged
 				delete(s.waitAcksIndirect, senderId)
 			}
+			s.lock.Unlock()
 			// ignore ping ack that is not recorded
 		} else { // other's ack, just send an ack back
 			ackMessage := utils.Message{
@@ -98,14 +99,15 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 	return 0
 }
 
-func (s *Swim) SendPingReq(k int, myInfo member.Info) int64 {
+func (s *Swim) SendPingReq(k int, myInfo member.Info, targetInfo member.Info) int64 {
 	// Send ping request to other k member
 	var totalBytes int64 = 0
 	infoMap := s.Membership.GetInfoMap()
 	for i := 0; i < k; i++ {
-		targetInfo, err := s.Membership.GetTarget()
+		forwarderInfo, err := s.Membership.GetTarget()
 		if err != nil {
 			log.Printf("Failed to get target info for ping request: %s", err.Error())
+			os.Exit(1) // fatal error
 		}
 		message := utils.Message{
 			Type:          utils.PingReq,
@@ -115,7 +117,7 @@ func (s *Swim) SendPingReq(k int, myInfo member.Info) int64 {
 			RequesterInfo: myInfo,
 		}
 		// send message
-		size, err := utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
+		size, err := utils.SendMessage(message, forwarderInfo.Hostname, forwarderInfo.Port)
 		if err != nil {
 			log.Printf("Failed to send message to %s: %s", targetInfo.String(), err.Error())
 		}
@@ -137,13 +139,15 @@ func (s *Swim) SwimStep(
 	err := s.Membership.Heartbeat(myId, currentTime)
 	if err != nil {
 		log.Printf("Failed to heartbeat: %s", err.Error())
+		os.Exit(1) // auto restart when fail
 	}
-	
+
 	// Mutex lock
 	s.lock.Lock()
-	defer s.lock.Unlock()
 
-	var totalBytes int64 = 0 
+	var totalBytes int64 = 0
+	var membersToPingReq []member.Info
+
 	// check if there's any waitAcksIndirect haven't receive pong after TpingReqFail
 	for id, info := range s.waitAcksIndirect {
 		if currentTime.Sub(info.Timestamp) > TpingReqFail {
@@ -169,9 +173,16 @@ func (s *Swim) SwimStep(
 			info.Timestamp = currentTime
 			s.waitAcksIndirect[id] = info
 			// send ping request to other k member
-			n := s.SendPingReq(k, myInfo)
-			totalBytes += n
+			// n := s.SendPingReq(k, myInfo)
+			// totalBytes += n
+			membersToPingReq = append(membersToPingReq, info)
 		}
+	}
+	s.lock.Unlock()
+
+	for _, info := range membersToPingReq {
+		n := s.SendPingReq(k, myInfo, info)
+		totalBytes += n
 	}
 
 	s.Membership.Cleanup(currentTime, Tcleanup)
@@ -180,6 +191,7 @@ func (s *Swim) SwimStep(
 	targetInfo, err := s.Membership.GetTarget()
 	if err != nil {
 		log.Printf("Failed to get target info: %s", err.Error())
+		os.Exit(1) // fatal error, restart
 	}
 
 	// create ping message
