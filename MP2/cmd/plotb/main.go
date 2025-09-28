@@ -81,67 +81,47 @@ func getTableWithTimeout(
 
 }
 
-func test(numOfFailure int, mode Args) {
-	// restart server
-	for _, hostname := range utils.HOSTS[1:] {
-		result := new(string)
-		args := Args{
-			Command: "stop",
-		}
-		CallWithTimeout(hostname, 12345, args, result)
-		log.Printf("restart server, Hostname: %s\n", hostname)
-		startTime := time.Now() // wait 3s
-		for {
-			if time.Since(startTime) > 3*time.Second {
-				break
-			}
-		}
-	}
-	
+func test(rate float64, mode Args) {
+
+	log.Printf("Wait 10s for every thing to become stable.")
 	startTime := time.Now() // wait 10s for every thing to become stable
 	for {
-		if time.Since(startTime) > 10 * time.Second {
+		if time.Since(startTime) > 10*time.Second {
 			break
 		}
 	}
 
-	for i := 0; i < numOfFailure; i++ {
-		// let machine utils.HOST[9 - i] leave the group
-		args := Args{
-			Command: "leave",
-		}
-		result := new(string)
-		CallWithTimeout(utils.HOSTS[9 - i], 12345, args, result)
-		log.Printf("Let %s leave the group: %s", utils.HOSTS[9 - i], *result)
-	}
-	
 	ticker := time.NewTicker(time.Second / 10)
-	log.Printf("Start experimenting with %d simultaneous failures\n", numOfFailure)
-	// collect result for 10 s
+	log.Printf("Start experimenting with drop rate %f\n", rate)
+	// start testing for 30 s
 	startTime = time.Now()
 
 	var failure_map map[uint64]member.Info = make(map[uint64]member.Info)
 	for range ticker.C {
 
-		// set mode
+		// set drop rate and mode
 		for _, hostname := range utils.HOSTS {
 			result := new(string)
+			args := Args{
+				Command: "set_drop_rate",
+				Rate:    rate,
+			}
+			CallWithTimeout(hostname, 12345, args, result)
 			CallWithTimeout(hostname, 12345, mode, result)
+			// log.Printf("Set mode, Hostname: %s: %s\n", hostname, *result)
 		}
 
-		if time.Since(startTime) > time.Second * 10 {
+		currentTime := time.Now()
+		if currentTime.Sub(startTime) > time.Minute/2 {
 			break
 		}
-
 		for _, hostname := range utils.HOSTS {
 			result := new(map[uint64]member.Info)
 			args := Args{}
 			getTableWithTimeout(hostname, 12345, args, result)
 			for id, info := range *result {
 				// log.Printf("failed %v\n", info)
-				_, ok := failure_map[id]
-				if info.State == member.Failed && !ok {
-					log.Printf("Node %s:%d failed after %v", info.Hostname, info.Port, time.Since(startTime))
+				if info.State == member.Failed {
 					failure_map[id] = info
 				}
 			}
@@ -163,7 +143,7 @@ func main() {
 		Command: fmt.Sprintf("switch(%s,%s)", protocol, sus),
 	}
 
-	for _, rate := range []float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5} {
+	for _, rate := range []float64{0.2, 0.3, 0.4, 0.5, 0.6, 0.7} {
 		test(rate, mode)
 	}
 

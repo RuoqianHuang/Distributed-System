@@ -138,8 +138,7 @@ func (s *Swim) SwimStep(
 	// increase heartbeat counter; here it acts as an incarnation number
 	err := s.Membership.Heartbeat(myId, currentTime)
 	if err != nil {
-		log.Printf("Failed to heartbeat: %s", err.Error())
-		os.Exit(1) // auto restart when fail
+		log.Fatalf("Failed to heartbeat: %s", err.Error())
 	}
 
 	// Mutex lock
@@ -211,7 +210,9 @@ func (s *Swim) SwimStep(
 		totalBytes += n
 		targetId := member.HashInfo(targetInfo)
 		targetInfo.Timestamp = currentTime
-		s.waitAcksDirect[targetId] = targetInfo
+		s.lock.Lock()
+    	s.waitAcksDirect[targetId] = targetInfo
+    	s.lock.Unlock()
 	}
 	return totalBytes
 }

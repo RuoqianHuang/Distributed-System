@@ -454,6 +454,9 @@ func (m *Membership) Heartbeat(id uint64, currentTime time.Time) error {
 	defer m.lock.Unlock()
 	info, ok := m.InfoMap[id]
 	if ok {
+		if info.State == Failed {
+			return fmt.Errorf("you failed")
+		}
 		info.Timestamp = currentTime
 		info.Counter++
 		m.InfoMap[id] = info

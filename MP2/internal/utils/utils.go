@@ -44,8 +44,10 @@ const (
 	Probe // message for joining
 	ProbeAckGossip
 	ProbeAckSwim
-	UseSwim
-	UseGossip
+	UseSwimSus
+	UseSwimNoSus
+	UseGossipSus
+	UseGossipNoSus
 	Leave // message for voluntary leave
 )
 

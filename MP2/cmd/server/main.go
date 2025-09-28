@@ -63,6 +63,21 @@ func (s *Server) MemberTable(args Args, reply *map[uint64]member.Info) error {
 	return nil
 }
 
+func (s *Server) GetTotalFlow(args Args, reply *float64) error {
+	*reply = s.InFlow.Get() + s.OutFlow.Get()
+	return nil
+}
+
+func (s *Server) GetInFlow(args Args, reply *float64) error {
+	*reply = s.InFlow.Get()
+	return nil
+}
+
+func (s *Server) GetOutFlow(args Args, reply *float64) error {
+	*reply = s.OutFlow.Get()
+	return nil
+}
+
 func getHostName() string {
 	name, err := os.Hostname()
 	if err != nil {
@@ -76,17 +91,13 @@ func (s *Server) CLI(args Args, reply *string) error {
 	// log.Printf("received cli command: %s", args.Command)
 
 	switch args.Command {
-	case "gossip":
-		s.switchToGossip()
-		*reply = "Switched to Gossip protocol"
-	case "swim":
-		s.switchToSwim()
-		*reply = "Switched to SWIM protocol"
 	case "status":
 		s.lock.RLock()
 		state := s.state
+		dropRate := s.dropRate
+		susMode := s.suspicionMode
 		s.lock.RUnlock()
-		*reply = fmt.Sprintf("Current protocol: %s, Input: %f bytes/s, Output %f bytes/s\n", s.getStateString(state), s.InFlow.Get(), s.OutFlow.Get())
+		*reply = fmt.Sprintf("Current protocol: %s, suspect mode: %v, drop rate: %f, Input: %f bytes/s, Output %f bytes/s\n", s.getStateString(state), susMode, dropRate, s.InFlow.Get(), s.OutFlow.Get())
 		*reply = *reply + s.membership.Table()
 	case "list_mem":
 		*reply = "\n" + s.membership.Table()
@@ -221,25 +232,36 @@ func (s *Server) handleSwitchCommand(command string) string {
 	// Switch protocol and suspicion mode
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+
+
 	switch protocol {
 	case "gossip":
 		s.state = Gossip
-		s.sendSwitchMessage(utils.UseGossip, "")
+		switch suspicion {
+		case "suspect":
+			s.suspicionMode = true	
+			s.sendSwitchMessage(utils.UseGossipSus, "")
+		case "nosuspect":
+			s.suspicionMode = false
+			s.sendSwitchMessage(utils.UseGossipNoSus, "")
+		default:
+			return "Invalid suspicion mode. Use 'suspect' or 'nosuspect', got " + protocol + " " + suspicion
+		}
 	case "ping":
 		s.state = Swim
-		s.sendSwitchMessage(utils.UseSwim, "")
+		switch suspicion {
+		case "suspect":
+			s.suspicionMode = true	
+			s.sendSwitchMessage(utils.UseSwimSus, "")
+		case "nosuspect":
+			s.suspicionMode = false
+			s.sendSwitchMessage(utils.UseSwimNoSus, "")
+		default:
+			return "Invalid suspicion mode. Use 'suspect' or 'nosuspect', got " + protocol + " " + suspicion
+		}
 	default:
 		return "Invalid protocol. Use 'gossip' or 'ping'"
-	}
-
-	// Switch suspicion mode
-	switch suspicion {
-	case "suspect":
-		s.suspicionMode = true
-	case "nosuspect":
-		s.suspicionMode = false
-	default:
-		return "Invalid suspicion mode. Use 'suspect' or 'nosuspect'"
 	}
 
 	log.Printf("Switched to %s protocol with %s suspicion", protocol, suspicion)
@@ -256,38 +278,6 @@ func (s *Server) handleDropRateCommand(args Args) string {
 	s.lock.Unlock()
 
 	return fmt.Sprintf("Set drop rate to %.2f", args.Rate)
-}
-
-func (s *Server) switchToGossip() {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.state == Gossip {
-		log.Printf("Already using Gossip protocol")
-		return
-	}
-
-	log.Printf("Switching to Gossip protocol")
-	s.state = Gossip
-
-	// Send switch message to all members
-	s.sendSwitchMessage(utils.UseGossip, "")
-}
-
-func (s *Server) switchToSwim() {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.state == Swim {
-		log.Printf("Already using SWIM protocol")
-		return
-	}
-
-	log.Printf("Switching to SWIM protocol")
-	s.state = Swim
-
-	// Send switch message to all members
-	s.sendSwitchMessage(utils.UseSwim, "")
 }
 
 func (s *Server) sendSwitchMessage(messageType utils.MessageType, excludeHostname string) {
@@ -325,21 +315,30 @@ func (s *Server) handleSwitchMessage(message utils.Message) {
 
 	// Check if we need to switch protocols
 	var newState ServerState
+	var newSusMode bool
 	switch message.Type {
-	case utils.UseGossip:
+	case utils.UseGossipSus:
 		newState = Gossip
-	case utils.UseSwim:
+		newSusMode = true
+	case utils.UseGossipNoSus:
+		newState = Gossip
+		newSusMode = false
+	case utils.UseSwimSus:
 		newState = Swim
+		newSusMode = true
+	case utils.UseSwimNoSus:
+		newState = Swim
+		newSusMode = false
 	default:
 		log.Printf("Unknown switch message type: %v", message.Type)
 		return
 	}
-
+	s.suspicionMode = newSusMode
 	// Only switch if we're not already in the target state
 	if s.state != newState {
 		log.Printf("Received switch message to %s from %s", s.getStateString(newState), message.SenderInfo.String())
 		s.state = newState
-
+		
 		// Forward the switch message to other members (gossip-style propagation)
 		s.sendSwitchMessage(message.Type, message.SenderInfo.Hostname)
 	} else {
@@ -491,7 +490,7 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 					s.OutFlow.Add(size)
 					log.Printf("Welcome, send probe ack message to %s:%d: %v", message.SenderInfo.Hostname, message.SenderInfo.Port, ackMessage)
 				}
-			case utils.UseSwim, utils.UseGossip:
+			case utils.UseSwimSus, utils.UseGossipSus, utils.UseSwimNoSus, utils.UseGossipNoSus:
 				// Handle algorithm switch messages
 				s.handleSwitchMessage(message)
 			default:
@@ -512,6 +511,7 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 	for range ticker.C {
 		s.lock.RLock()
 		suspicionMode := s.suspicionMode
+		state := s.state
 		s.lock.RUnlock()
 
 		infoMap := s.membership.GetInfoMap()
@@ -523,7 +523,7 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 			log.Fatal("Isolated from the master, restarting")
 		}
 
-		switch s.state {
+		switch state {
 		case Swim:
 			size := s.swim.SwimStep(s.Id, s.Info, s.K, s.TpingFail, s.TpingReqFail, s.Tcleanup, suspicionMode)
 			s.OutFlow.Add(size)

@@ -31,8 +31,7 @@ func (g *Gossip) GossipStep(
 	// increase heartbeat counter
 	err := g.Membership.Heartbeat(myId, currentTime)
 	if err != nil {
-		log.Printf("Failed to heartbeat: %s", err.Error())
-		os.Exit(1) // auto restart
+		log.Fatalf("Failed to heartbeat: %s", err.Error())
 	}
 
 	// update state

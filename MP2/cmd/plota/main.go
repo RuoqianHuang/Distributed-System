@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cs425/mp2/internal/member"
 	"cs425/mp2/internal/utils"
 	"fmt"
 	"log"
@@ -26,12 +25,11 @@ func CallWithTimeout(
 	hostname string,
 	port int,
 	args Args,
-	result *string) {
+	result *string) error {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		// log.Printf("Failed to dial server %s:%d: %s\n", hostname, port, err.Error())
-		return
+		return err
 	}
 	defer conn.Close()
 
@@ -44,23 +42,23 @@ func CallWithTimeout(
 	select {
 	case err := <-callChan:
 		if err != nil {
-			// log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
+			return err
 		}
 	case <-time.After(CALL_TIMEOUT):
-		// log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("RPC call to server %s:%d timed out\n", hostname, port)
 	}
+	return nil
 }
 
-func getTableWithTimeout(
+func getFlowWithTimeout(
 	hostname string,
 	port int,
 	args Args,
-	result *map[uint64]member.Info) {
+	result *float64) error {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		// log.Printf("Failed to dial server %s:%d: %s\n", hostname, port, err.Error())
-		return
+		return err
 	}
 	defer conn.Close()
 
@@ -68,83 +66,96 @@ func getTableWithTimeout(
 	callChan := make(chan error, 1)
 
 	go func() {
-		callChan <- client.Call("Server.MemberTable", args, result)
+		callChan <- client.Call("Server.GetTotalFlow", args, result)
 	}()
 	select {
 	case err := <-callChan:
 		if err != nil {
-			// log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
+			return err
 		}
 	case <-time.After(CALL_TIMEOUT):
-		// log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("RPC call to server %s:%d timed out\n", hostname, port)
 	}
-
+	return nil
 }
 
-func test(rate float64, mode Args) {
-	// restart server
-	for _, hostname := range utils.HOSTS[1:] {
+func test(n int, mode Args) {
+	// restart all nodes
+	for _, hostname := range utils.HOSTS {
 		result := new(string)
 		args := Args{
 			Command: "stop",
 		}
 		CallWithTimeout(hostname, 12345, args, result)
-		log.Printf("restart server, Hostname: %s\n", hostname)
-		startTime := time.Now() // wait 3s
+		log.Printf("Restart %s\n", hostname)
+		currentTime := time.Now()
+		// wait 3s
 		for {
-			if time.Since(startTime) > 3*time.Second {
+			if time.Since(currentTime) > 3*time.Second {
 				break
 			}
 		}
 	}
-	
+
+	log.Printf("Wait 10s for every thing to become stable.")
 	startTime := time.Now() // wait 10s for every thing to become stable
 	for {
-		if time.Since(startTime) > 10 * time.Second {
+		if time.Since(startTime) > 10*time.Second {
 			break
 		}
 	}
-	
+
+	offHosts := utils.HOSTS[n:]
+	curHosts := utils.HOSTS[:n]
+
+	// set mode and drop rate to 0
+	for _, hostname := range curHosts {
+		result := new(string)
+		args := Args{
+			Command: "set_drop_rate",
+			Rate:    0.0,
+		}
+		CallWithTimeout(hostname, 12345, args, result)
+		CallWithTimeout(hostname, 12345, mode, result)
+	}
+	// let off nodes leave and halt
+	for _, hostname := range offHosts {
+		result := new(string)
+		args := Args{
+			Command: "leave",
+		}
+		CallWithTimeout(hostname, 12345, args, result)
+		log.Printf("Let %s leave\n", hostname)
+	}
+
 	ticker := time.NewTicker(time.Second / 10)
-	log.Printf("Start experimenting with drop rate %f\n", rate)
-	// start testing for 30 s
+	log.Printf("Start experimenting with %d machines for 10s\n", n)
+	// start testing for 10 s
 	startTime = time.Now()
 
-
-
-	var failure_map map[uint64]member.Info = make(map[uint64]member.Info)
+	var total_flow float64 = 0.0
+	var sample_cnt int = 0
 	for range ticker.C {
-
-		// set drop rate and mode
-		for _, hostname := range utils.HOSTS {
+		// set mode
+		for _, hostname := range curHosts {
 			result := new(string)
-			args := Args{
-				Command: "set_drop_rate",
-				Rate:    rate,
-			}
-			CallWithTimeout(hostname, 12345, args, result)
 			CallWithTimeout(hostname, 12345, mode, result)
-			// log.Printf("Set drop rate, Hostname: %s: %s\n", hostname, *result)
 		}
 
 		currentTime := time.Now()
-		if currentTime.Sub(startTime) > time.Minute/2 {
+		if currentTime.Sub(startTime) > time.Second*10 {
 			break
 		}
-		for _, hostname := range utils.HOSTS {
-			result := new(map[uint64]member.Info)
+		for _, hostname := range curHosts {
+			result := new(float64)
 			args := Args{}
-			getTableWithTimeout(hostname, 12345, args, result)
-			for id, info := range *result {
-				// log.Printf("failed %v\n", info)
-				if info.State == member.Failed {
-					failure_map[id] = info
-				}
-			}
+			getFlowWithTimeout(hostname, 12345, args, result)
+			total_flow += *result
+			sample_cnt += 1
 		}
 
 	}
-	log.Printf("Total failure count: %d\n", len(failure_map))
+	log.Printf("Average flow in 10s: %f\n", total_flow/float64(sample_cnt))
 }
 
 func main() {
@@ -159,8 +170,8 @@ func main() {
 		Command: fmt.Sprintf("switch(%s,%s)", protocol, sus),
 	}
 
-	for _, rate := range []float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5} {
-		test(rate, mode)
+	for _, n := range []int{2, 4, 6, 8, 10} {
+		test(n, mode)
 	}
 
 }
