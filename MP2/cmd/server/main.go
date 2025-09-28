@@ -516,8 +516,11 @@ func (s *Server) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 
 		infoMap := s.membership.GetInfoMap()
 		if len(infoMap) == 1 && getHostName() != utils.HOSTS[0] {
-			log.Printf("The node might failed, restarting")
-			os.Exit(1)
+			log.Fatal("The node might failed, restarting")
+		}
+
+		if !s.membership.Exists(utils.HOSTS[0], utils.DEFAULT_PORT) {
+			log.Fatal("Isolated from the master, restarting")
 		}
 
 		switch s.state {

@@ -423,6 +423,17 @@ func (m *Membership) GetTarget() (Info, error) {
 	return targetInfo, nil
 }
 
+func (m *Membership) Exists(hostname string, port int) bool {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	for _, info := range m.InfoMap {
+		if info.Hostname == hostname && info.Port == port {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Membership) GetInfoMap() map[uint64]Info {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
