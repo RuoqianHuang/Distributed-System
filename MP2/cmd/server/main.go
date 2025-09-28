@@ -8,10 +8,12 @@ import (
 	"cs425/mp2/internal/utils"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"net/rpc"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -44,6 +46,7 @@ type Server struct {
 	swim         *swim.Swim         // swim instance
 	state        ServerState        // server's state
 	suspicionMode bool              // whether suspicion mechanism is enabled
+	dropRate     float64            // message drop rate (0.0 to 1.0)
 	lock         sync.RWMutex       // mutex for server's property
 	InFlow       flow.FlowCounter   // input network counter
 	OutFlow      flow.FlowCounter   // output network counter
@@ -97,12 +100,14 @@ func (s *Server) CLI(args Args, reply *string) error {
 			suspicion = "suspect"
 		}
 		*reply = fmt.Sprintf("<%s, %s>", protocol, suspicion)
+	case "set_drop_rate":
+		*reply = s.handleDropRateCommand(args)
 	default:
 		// Check for switch command with parameters
 		if len(args.Command) > 6 && args.Command[:6] == "switch" {
 			*reply = s.handleSwitchCommand(args.Command)
 		} else {
-			*reply = "Unknown command. Available commands: gossip, swim, status, list_mem, list_self, join, leave, display_suspects, display_protocol, switch(protocol, suspicion)"
+			*reply = "Unknown command. Available commands: gossip, swim, status, list_mem, list_self, join, leave, display_suspects, display_protocol, switch(protocol, suspicion), set_drop_rate"
 		}
 	}
 	return nil
@@ -225,6 +230,32 @@ func (s *Server) handleSwitchCommand(command string) string {
 	s.lock.Unlock()
 	
 	return fmt.Sprintf("Switched to %s protocol with %s suspicion", protocol, suspicion)
+}
+
+func (s *Server) handleDropRateCommand(args Args) string {
+	// Parse set_drop_rate command
+	// Expected format: set_drop_rate 0.1
+	parts := strings.Fields(args.Command)
+	
+	if len(parts) != 2 {
+		return "Invalid drop rate command format. Use: set_drop_rate 0.1"
+	}
+	
+	rateStr := parts[1]
+	rate, err := strconv.ParseFloat(rateStr, 64)
+	if err != nil {
+		return "Invalid drop rate value. Use a number between 0.0 and 1.0"
+	}
+	
+	if rate < 0.0 || rate > 1.0 {
+		return "Drop rate must be between 0.0 and 1.0"
+	}
+	
+	s.lock.Lock()
+	s.dropRate = rate
+	s.lock.Unlock()
+	
+	return fmt.Sprintf("Set drop rate to %.2f", rate)
 }
 
 func (s *Server) switchToGossip() {
@@ -395,6 +426,17 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 			continue
 		}
 		s.InFlow.Add(int64(size))
+		
+		// Apply message drop rate
+		s.lock.RLock()
+		dropRate := s.dropRate
+		s.lock.RUnlock()
+		
+		if dropRate > 0 && rand.Float64() < dropRate {
+			log.Printf("Dropping message (drop rate: %.2f)", dropRate)
+			continue
+		}
+		
 		message, err := utils.Deserialize(data)
 		if err != nil {
 			log.Printf("Failed to deserialize message: %s", err.Error())
@@ -568,6 +610,7 @@ func main() {
 		swim:         mySwim,
 		state:        Init,
 		suspicionMode: true, // suspicion enabled by default
+		dropRate:     0.0,   // no message dropping by default
 	}
 
 	// register rpc server for CLI function
