@@ -18,12 +18,13 @@ const (
 // arguments for cli tool
 type Args struct {
 	Command string
+	Rate float64 
 }
 
 func CallWithTimeout(
 	hostname string,
 	port int,
-	query string,
+	args Args,
 	result *string) {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
@@ -37,9 +38,6 @@ func CallWithTimeout(
 	callChan := make(chan error, 1)
 
 	go func() {
-		args := Args{
-			Command: query,
-		}
 		callChan <- client.Call("Server.CLI", args, result)
 	}()
 	select {
@@ -61,7 +59,6 @@ func main() {
 
 	port := 12345
 	hostname := "fa25-cs425-b601.cs.illinois.edu"
-	query := "status"
 
 	var otherArgs []string
 	for i := 1; i < len(os.Args); i++ {
@@ -84,17 +81,25 @@ func main() {
 	if len(otherArgs) < 2 {
 		log.Fatal("Please specify query and hostname")
 	}
-
+	args := Args{
+		Command: "status",
+		Rate: 1.0,
+	}
 	if otherArgs[0] == "set_drop_rate" && len(otherArgs) >= 3 {
-		query = otherArgs[0] + " " + otherArgs[1]  // "set_drop_rate 0.5"
+		args.Command = otherArgs[0]
+		rate, err := strconv.ParseFloat(otherArgs[1], 64)  // "set_drop_rate 0.5"
+		if err != nil {
+			log.Fatal("Invalid drop rate");
+		}
+		args.Rate = rate
 		hostname = otherArgs[2]  // "localhost"
 	} else {
-		query = otherArgs[0]
+		args.Command = otherArgs[0]
 		hostname = otherArgs[1]
 	}
 
 	result := new(string)
-	CallWithTimeout(hostname, port, query, result)
+	CallWithTimeout(hostname, port, args, result)
 
 	log.Printf("\n%s", *result)
 

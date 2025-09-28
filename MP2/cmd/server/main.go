@@ -13,7 +13,6 @@ import (
 	"net/rpc"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -55,6 +54,13 @@ type Server struct {
 // arguments for cli tool
 type Args struct {
 	Command string
+	Rate float64
+}
+
+func (s *Server) MemberTable(args Args, reply *map[uint64]member.Info) error {
+	res := s.membership.GetInfoMap()
+	reply = &res
+	return nil
 }
 
 func (s *Server) CLI(args Args, reply *string) error {
@@ -72,15 +78,19 @@ func (s *Server) CLI(args Args, reply *string) error {
 		s.lock.RLock()
 		state := s.state
 		s.lock.RUnlock()
-		*reply = fmt.Sprintf("Current protocol: %s, Input: %f bytes/s, Output %f bytes/s", s.getStateString(state), s.InFlow.Get(), s.OutFlow.Get())
-		*reply = *reply + "\n" + s.membership.Table()
-	case "list_mem":
-		*reply = s.membership.Table()
-	case "list_self":
+		*reply = fmt.Sprintf("Current protocol: %s, Input: %f bytes/s, Output %f bytes/s\n", s.getStateString(state), s.InFlow.Get(), s.OutFlow.Get())
+		*reply = *reply + s.membership.Table()
+	case "list":
+		*reply = "\n" + s.membership.Table()
+	case "self":
 		*reply = fmt.Sprintf("Self ID: %d, Hostname: %s, Port: %d", s.Id, s.Info.Hostname, s.Info.Port)
-	case "join":
+	case "rejoin":
 		// Join is implicit on startup, but we can provide status
-		*reply = "Already joined the group. Use 'list_mem' to see membership."
+		s.lock.RLock()
+		// try to rejoin group with a new version 
+		s.membership.Reset(time.Now(), s.Info.Hostname, s.Info.Port)
+		s.joinGroup()
+		s.lock.RUnlock()
 	case "leave":
 		s.leaveGroup()
 		*reply = "Left the group voluntarily"
@@ -107,7 +117,7 @@ func (s *Server) CLI(args Args, reply *string) error {
 		if len(args.Command) > 6 && args.Command[:6] == "switch" {
 			*reply = s.handleSwitchCommand(args.Command)
 		} else {
-			*reply = "Unknown command. Available commands: gossip, swim, status, list_mem, list_self, join, leave, display_suspects, display_protocol, switch(protocol, suspicion), set_drop_rate"
+			*reply = "Unknown command. Available commands: gossip, swim, status, list, self, rejoin, leave, display_suspects, display_protocol, switch(protocol,suspicion), set_drop_rate"
 		}
 	}
 	return nil
@@ -152,9 +162,6 @@ func (s *Server) leaveGroup() {
 }
 
 func (s *Server) getSuspectedNodes() string {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-	
 	infoMap := s.membership.GetInfoMap()
 	suspected := []string{}
 	
@@ -207,55 +214,42 @@ func (s *Server) handleSwitchCommand(command string) string {
 	
 	// Switch protocol and suspicion mode
 	s.lock.Lock()
-	if protocol == "gossip" {
+	defer s.lock.Unlock()
+	switch protocol {
+	case "gossip":
 		s.state = Gossip
 		s.sendSwitchMessage(utils.UseGossip, "")
-	} else if protocol == "ping" {
+	case "ping":
 		s.state = Swim
 		s.sendSwitchMessage(utils.UseSwim, "")
-	} else {
-		s.lock.Unlock()
+	default:
 		return "Invalid protocol. Use 'gossip' or 'ping'"
 	}
 	
 	// Switch suspicion mode
-	if suspicion == "suspect" {
+	switch suspicion {
+	case "suspect":
 		s.suspicionMode = true
-	} else if suspicion == "nosuspect" {
+	case "nosuspect":
 		s.suspicionMode = false
-	} else {
-		s.lock.Unlock()
+	default:
 		return "Invalid suspicion mode. Use 'suspect' or 'nosuspect'"
 	}
-	s.lock.Unlock()
 	
+	log.Printf("Switched to %s protocol with %s suspicion", protocol, suspicion)
 	return fmt.Sprintf("Switched to %s protocol with %s suspicion", protocol, suspicion)
 }
 
 func (s *Server) handleDropRateCommand(args Args) string {
-	// Parse set_drop_rate command
-	// Expected format: set_drop_rate 0.1
-	parts := strings.Fields(args.Command)
-	
-	if len(parts) != 2 {
-		return "Invalid drop rate command format. Use: set_drop_rate 0.1"
-	}
-	
-	rateStr := parts[1]
-	rate, err := strconv.ParseFloat(rateStr, 64)
-	if err != nil {
-		return "Invalid drop rate value. Use a number between 0.0 and 1.0"
-	}
-	
-	if rate < 0.0 || rate > 1.0 {
+	if args.Rate < 0.0 || args.Rate > 1.0 {
 		return "Drop rate must be between 0.0 and 1.0"
 	}
 	
 	s.lock.Lock()
-	s.dropRate = rate
+	s.dropRate = args.Rate
 	s.lock.Unlock()
-	
-	return fmt.Sprintf("Set drop rate to %.2f", rate)
+
+	return fmt.Sprintf("Set drop rate to %.2f", args.Rate)
 }
 
 func (s *Server) switchToGossip() {
@@ -305,11 +299,11 @@ func (s *Server) sendSwitchMessage(messageType utils.MessageType, excludeHostnam
 				TargetInfo: info,
 				InfoMap:    infoMap,
 			}
-			size, err := utils.SendMessage(switchMessage, info.Hostname, info.Port)
+			_, err := utils.SendMessage(switchMessage, info.Hostname, info.Port)
 			if err != nil {
 				log.Printf("Failed to send switch message to %s: %s", info.String(), err.Error())
 			} else {
-				s.OutFlow.Add(size)
+				// s.OutFlow.Add(size) // only count 
 				log.Printf("Sent switch message to %s", info.String())
 			}
 		}
@@ -321,7 +315,7 @@ func (s *Server) handleSwitchMessage(message utils.Message) {
 	defer s.lock.Unlock()
 
 	// Merge membership information first
-	s.membership.Merge(message.InfoMap, time.Now())
+	// s.membership.Merge(message.InfoMap, time.Now())
 
 	// Check if we need to switch protocols
 	var newState ServerState
@@ -370,23 +364,23 @@ func (s *Server) joinGroup() {
 		InfoMap:    s.membership.GetInfoMap(),
 	}
 	for _, hostname := range utils.HOSTS {
-		size, err := utils.SendMessage(message, hostname, utils.DEFAULT_PORT)
+		_, err := utils.SendMessage(message, hostname, utils.DEFAULT_PORT)
 		if err != nil {
 			log.Printf("Failed to send probe message to %s:%d: %s", hostname, utils.DEFAULT_PORT, err.Error())
-		} else {
-			s.OutFlow.Add(size)
-		}
+		} // else {
+		// 	s.OutFlow.Add(size) // only count protocol message
+		// }
 	}
 	// wait for probe ack
 	buffer := make([]byte, 4096)
 	for {
-		size, _, err := conn.ReadFromUDP(buffer)
+		_, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			log.Printf("Failed to get probe ack, starting the group alone with gossip mode")
 			s.state = Gossip
 			break
 		}
-		s.InFlow.Add(int64(size))
+		// s.InFlow.Add(int64(size))
 		message, err := utils.Deserialize(buffer)
 		if err != nil {
 			log.Printf("Failed to deserialize message: %s", err.Error())
@@ -425,28 +419,31 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 			log.Printf("UDP Read error: %s", err.Error())
 			continue
 		}
-		s.InFlow.Add(int64(size))
-		
-		// Apply message drop rate
-		s.lock.RLock()
-		dropRate := s.dropRate
-		s.lock.RUnlock()
-		
-		if dropRate > 0 && rand.Float64() < dropRate {
-			log.Printf("Dropping message (drop rate: %.2f)", dropRate)
-			continue
-		}
 		
 		message, err := utils.Deserialize(data)
 		if err != nil {
 			log.Printf("Failed to deserialize message: %s", err.Error())
 		} else {
 			switch message.Type {
-			case utils.Gossip:
-				s.gossip.HandleIncomingMessage(message)
-			case utils.Ping, utils.Pong, utils.PingReq:
-				size := s.swim.HandleIncomingMessage(message, s.Info)
-				s.OutFlow.Add(size)
+			case utils.Gossip, utils.Ping, utils.PingReq, utils.Pong:
+				// only apply message drop and flow counter to protocol messages 
+				s.lock.RLock()
+				dropRate := s.dropRate
+				s.lock.RUnlock()
+				
+				if dropRate > 0 && rand.Float64() < dropRate {
+					// log.Printf("Dropping message (drop rate: %.2f)", dropRate)
+					continue
+				}
+				s.InFlow.Add(int64(size))
+				
+				switch message.Type {
+				case utils.Gossip:
+					s.gossip.HandleIncomingMessage(message)
+				case utils.Ping, utils.Pong, utils.PingReq:
+					size := s.swim.HandleIncomingMessage(message, s.Info)
+					s.OutFlow.Add(size)
+				}
 			case utils.Leave:
 				// Handle voluntary leave - remove the sender from membership
 				senderId := member.HashInfo(message.SenderInfo)
@@ -454,7 +451,7 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 				log.Printf("Node %s voluntarily left the group", message.SenderInfo.String())
 			case utils.Probe:
 				// someone want to join the group, send some information back
-				log.Printf("Receive probe message: %v", message)
+				log.Printf("Receive probe message from: %s:%d", message)
 				s.membership.Merge(message.InfoMap, time.Now()) // merge new member
 				messageType := utils.ProbeAckGossip
 				s.lock.RLock()
@@ -539,7 +536,7 @@ func main() {
 	Tround := time.Second / 10
 	Tsuspect := Tround * 5
 	Tfail := Tround * 5
-	Tcleanup := Tround * 5
+	Tcleanup := Tround * 10
 	TpingFail := Tround * 5
 	TpingReqFail := Tround * 5
 

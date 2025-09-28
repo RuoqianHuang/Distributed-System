@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math/rand"
 	"sort"
 	"strings"
@@ -57,13 +58,15 @@ func (m *Membership) Merge(memberInfo map[uint64]Info, currentTime time.Time) bo
 				if member.State != Failed {
 					info.Timestamp = currentTime
 					m.InfoMap[id] = info // update to failed state
+					log.Printf("FAILED: Node %d (%s:%d) failed\n",
+						id, info.Hostname, info.Port)
 				}
 			} else if info.Counter > member.Counter {
 				// update member info with higher counter
 				info.Timestamp = currentTime
 				m.InfoMap[id] = info
 			}
-		} else {
+		} else if info.State != Failed {
 			info.Timestamp = currentTime
 			m.InfoMap[id] = info // add new member
 			memberChanged = true
@@ -90,24 +93,28 @@ func (m *Membership) UpdateStateGossip(currentTime time.Time, Tfail time.Duratio
 	for id, info := range m.InfoMap {
 		elapsed := currentTime.Sub(info.Timestamp)
 		oldState := info.State
-		if info.State == Alive && elapsed > Tsuspect {
+		if oldState == Alive && elapsed > Tsuspect {
 			if suspicionEnabled {
 				info.State = Suspected
 				info.Timestamp = currentTime
 				m.InfoMap[id] = info
-				
+
 				if oldState != Suspected {
-					fmt.Printf("SUSPECTED: Node %d (%s:%d) is now suspected\n", 
+					log.Printf("SUSPECTED: Node %d (%s:%d) is now suspected\n",
 						id, info.Hostname, info.Port)
 				}
 			} else {
 				// Skip suspicion, go directly to failed
+				log.Printf("FAILED: Node %d (%s:%d) failed\n",
+					id, info.Hostname, info.Port)
 				info.State = Failed
 				info.Timestamp = currentTime
 				m.InfoMap[id] = info
 				anyFailed = true
 			}
-		} else if info.State == Suspected && elapsed > Tfail {
+		} else if oldState == Suspected && elapsed > Tfail {
+			log.Printf("FAILED: Node %d (%s:%d) failed\n",
+				id, info.Hostname, info.Port)
 			info.State = Failed
 			info.Timestamp = currentTime
 			m.InfoMap[id] = info
@@ -135,7 +142,7 @@ func (m *Membership) UpdateStateSwim(currentTime time.Time, id uint64, state Mem
 	if ok && info.State != Failed {
 		oldState := info.State
 		info.Timestamp = currentTime
-		
+
 		if state == Suspected && !suspicionEnabled {
 			// Skip suspicion, go directly to failed
 			info.State = Failed
@@ -143,12 +150,12 @@ func (m *Membership) UpdateStateSwim(currentTime time.Time, id uint64, state Mem
 			info.State = state
 		}
 		m.InfoMap[id] = info
-		
+
 		if info.State == Suspected && oldState != Suspected && suspicionEnabled {
-			fmt.Printf("SUSPECTED: Node %d (%s:%d) is now suspected\n", 
+			log.Printf("SUSPECTED: Node %d (%s:%d) is now suspected\n",
 				id, info.Hostname, info.Port)
 		}
-		
+
 		return state == Failed
 	}
 	return false
@@ -165,14 +172,33 @@ func (m *Membership) Cleanup(currentTime time.Time, Tcleanup time.Duration) {
 	}
 }
 
+func (m *Membership) Reset(currentTime time.Time, hostname string, port int) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	newInfo := Info{
+		Hostname:  hostname,
+		Port:      port,
+		Version:   currentTime,
+		Timestamp: currentTime,
+		Counter:   0,
+		State:     Alive,
+	}
+	newId := HashInfo(newInfo)
+	m.Members = []uint64{newId}
+	m.InfoMap = map[uint64]Info{
+		newId: newInfo,
+	}
+	m.roundRobinIndex = 0
+}
+
 func (m *Membership) RemoveMember(id uint64) {
 	// remove a member completely (for voluntary leave)
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	
+
 	// Remove from InfoMap
 	delete(m.InfoMap, id)
-	
+
 	// Remove from Members list
 	for i, memberId := range m.Members {
 		if memberId == id {
@@ -180,9 +206,10 @@ func (m *Membership) RemoveMember(id uint64) {
 			break
 		}
 	}
-	
+
 	// Reset round robin index if needed
 	if m.roundRobinIndex >= len(m.Members) {
+		RandomPermutation(&m.Members)
 		m.roundRobinIndex = 0
 	}
 }
@@ -203,17 +230,17 @@ func (m *Membership) Table() string {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 	type Pair struct {
-		Id uint64
-		Hostname string 
-		Port int
+		Id       uint64
+		Hostname string
+		Port     int
 	}
 	infoList := make([]Pair, 0, 16)
 	for _, id := range m.Members {
 		info := m.InfoMap[id]
 		infoList = append(infoList, Pair{
-			Id: id,
+			Id:       id,
 			Hostname: info.Hostname,
-			Port: info.Port,
+			Port:     info.Port,
 		})
 	}
 	sort.Slice(infoList, func(i, j int) bool {
@@ -221,30 +248,30 @@ func (m *Membership) Table() string {
 			return infoList[i].Hostname < infoList[j].Hostname
 		}
 		return infoList[i].Port < infoList[j].Port
-	})  
+	})
 	// --------------------------------------------------------------------
 	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
 	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
 	// --------------------------------------------------------------------
 	maxLengths := map[string]int{
-		"Id": 0,
-		"Hostname": 0,
-		"Port": 0,
-		"Version": 0,
-		"Timestamp": 0,
-		"Counter": 0,
-		"State": 0,
+		"Id":        2,
+		"Hostname":  8,
+		"Port":      4,
+		"Version":   7,
+		"Timestamp": 9,
+		"Counter":   7,
+		"State":     5,
 	}
 	for _, i := range infoList {
 		info := m.InfoMap[i.Id]
 		lengths := map[string]int{
-			"Id": len(fmt.Sprintf("%d", i.Id)),
-			"Hostname": len(i.Hostname),
-			"Port": len(fmt.Sprintf("%d", i.Port)),
-			"Version": len(info.Version.Format(time.RFC3339Nano)),
+			"Id":        len(fmt.Sprintf("%d", i.Id)),
+			"Hostname":  len(i.Hostname),
+			"Port":      len(fmt.Sprintf("%d", i.Port)),
+			"Version":   len(info.Version.Format(time.RFC3339Nano)),
 			"Timestamp": len(info.Timestamp.Format(time.RFC3339Nano)),
-			"Counter": len(fmt.Sprintf("%d", info.Counter)),
-			"State": len(stateName[info.State]),
+			"Counter":   len(fmt.Sprintf("%d", info.Counter)),
+			"State":     len(stateName[info.State]),
 		}
 		for key, value := range lengths {
 			if maxLengths[key] < value {
@@ -258,112 +285,112 @@ func (m *Membership) Table() string {
 	}
 
 	res := strings.Repeat("-", totalLength) + "\n"
-	
+
 	// Add column headers
 	header := "| "
-	
+
 	// ID header
 	s := "ID"
 	if len(s) < maxLengths["Id"] {
-		s = s + strings.Repeat(" ", maxLengths["Id"] - len(s))
+		s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
 	}
 	header = header + s + " | "
-	
+
 	// Hostname header
 	s = "Hostname"
 	if len(s) < maxLengths["Hostname"] {
-		s = s + strings.Repeat(" ", maxLengths["Hostname"] - len(s))
+		s = s + strings.Repeat(" ", maxLengths["Hostname"]-len(s))
 	}
 	header = header + s + " | "
-	
+
 	// Port header
 	s = "Port"
 	if len(s) < maxLengths["Port"] {
-		s = s + strings.Repeat(" ", maxLengths["Port"] - len(s))
+		s = s + strings.Repeat(" ", maxLengths["Port"]-len(s))
 	}
 	header = header + s + " | "
-	
+
 	// Version header
 	s = "Version"
 	if len(s) < maxLengths["Version"] {
-		s = s + strings.Repeat(" ", maxLengths["Version"] - len(s))
+		s = s + strings.Repeat(" ", maxLengths["Version"]-len(s))
 	}
 	header = header + s + " | "
-	
+
 	// Timestamp header
 	s = "Timestamp"
 	if len(s) < maxLengths["Timestamp"] {
-		s = s + strings.Repeat(" ", maxLengths["Timestamp"] - len(s))
+		s = s + strings.Repeat(" ", maxLengths["Timestamp"]-len(s))
 	}
 	header = header + s + " | "
-	
+
 	// Counter header
 	s = "Counter"
 	if len(s) < maxLengths["Counter"] {
-		s = s + strings.Repeat(" ", maxLengths["Counter"] - len(s))
+		s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
 	}
 	header = header + s + " | "
-	
+
 	// State header
 	s = "State"
 	if len(s) < maxLengths["State"] {
-		s = s + strings.Repeat(" ", maxLengths["State"] - len(s))
+		s = s + strings.Repeat(" ", maxLengths["State"]-len(s))
 	}
 	header = header + s + " |"
-	
+
 	res = res + header + "\n"
 	res = res + strings.Repeat("-", totalLength) + "\n"
-	
+
 	for _, i := range infoList {
 		info := m.InfoMap[i.Id]
 		line := "| "
-		
+
 		// Id
 		s := fmt.Sprintf("%d", i.Id)
 		if len(s) < maxLengths["Id"] {
-			s = s + strings.Repeat(" ", maxLengths["Id"] - len(s))
+			s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
 		}
 		line = line + s + " | "
 
 		// Hostname
 		s = i.Hostname
 		if len(s) < maxLengths["Hostname"] {
-			s = s + strings.Repeat(" ", maxLengths["Hostname"] - len(s))
+			s = s + strings.Repeat(" ", maxLengths["Hostname"]-len(s))
 		}
 		line = line + s + " | "
 
 		// Port
 		s = fmt.Sprintf("%d", i.Port)
 		if len(s) < maxLengths["Port"] {
-			s = s + strings.Repeat(" ", maxLengths["Port"] - len(s))
+			s = s + strings.Repeat(" ", maxLengths["Port"]-len(s))
 		}
 		line = line + s + " | "
 
 		// Version
 		s = info.Version.Format(time.RFC3339Nano)
 		if len(s) < maxLengths["Version"] {
-			s = s + strings.Repeat(" ", maxLengths["Version"] - len(s))
+			s = s + strings.Repeat(" ", maxLengths["Version"]-len(s))
 		}
 		line = line + s + " | "
 
 		// Timestamp
 		s = info.Timestamp.Format(time.RFC3339Nano)
 		if len(s) < maxLengths["Timestamp"] {
-			s = s + strings.Repeat(" ", maxLengths["Timestamp"] - len(s))
+			s = s + strings.Repeat(" ", maxLengths["Timestamp"]-len(s))
 		}
 		line = line + s + " | "
 
-		// Counter 
+		// Counter
 		s = fmt.Sprintf("%d", info.Counter)
 		if len(s) < maxLengths["Counter"] {
-			s = s + strings.Repeat(" ", maxLengths["Counter"] - len(s))
+			s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
 		}
 		line = line + s + " | "
 
-		// State 
+		// State
 		s = stateName[info.State]
 		if len(s) < maxLengths["State"] {
-			s = s + strings.Repeat(" ", maxLengths["State"] - len(s))
+			s = s + strings.Repeat(" ", maxLengths["State"]-len(s))
 		}
 		line = line + s + " |"
 
@@ -378,6 +405,9 @@ func (m *Membership) GetTarget() (Info, error) {
 	// TODO: maybe not to send message to self
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	if len(m.Members) == 0 {
+		return Info{}, fmt.Errorf("no existing member")
+	}
 	targetInfo, ok := m.InfoMap[m.Members[m.roundRobinIndex]]
 	if !ok {
 		return Info{}, fmt.Errorf("inconsistent membership")
@@ -393,7 +423,16 @@ func (m *Membership) GetTarget() (Info, error) {
 func (m *Membership) GetInfoMap() map[uint64]Info {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
-	return m.InfoMap
+
+	// Create a new map to hold the copy.
+	infoMapCopy := make(map[uint64]Info, len(m.InfoMap))
+
+	// Copy the data from the internal map to the new one.
+	for id, info := range m.InfoMap {
+		infoMapCopy[id] = info
+	}
+
+	return infoMapCopy // Return the safe copy
 }
 
 func (m *Membership) Heartbeat(id uint64, currentTime time.Time) error {

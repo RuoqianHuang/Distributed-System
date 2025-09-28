@@ -50,7 +50,7 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 		if requesterId == targetId { // my ack
 			s.lock.Lock()
 			defer s.lock.Unlock()
-			log.Printf("Receive ping ack message from %s", message.SenderInfo.String())
+			// log.Printf("Receive ping ack message from %s", message.SenderInfo.String())
 			// direct ack
 			_, ok := s.waitAcksDirect[senderId]
 			if ok {
