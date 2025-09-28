@@ -85,8 +85,13 @@ func main() {
 		log.Fatal("Please specify query and hostname")
 	}
 
-	query = otherArgs[0]
-	hostname = otherArgs[1]
+	if otherArgs[0] == "set_drop_rate" && len(otherArgs) >= 3 {
+		query = otherArgs[0] + " " + otherArgs[1]  // "set_drop_rate 0.5"
+		hostname = otherArgs[2]  // "localhost"
+	} else {
+		query = otherArgs[0]
+		hostname = otherArgs[1]
+	}
 
 	result := new(string)
 	CallWithTimeout(hostname, port, query, result)
