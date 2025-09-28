@@ -67,9 +67,9 @@ func (s *Swim) HandleIncomingMessage(message utils.Message, myInfo member.Info) 
 			// ignore ping ack that is not recorded
 		} else { // other's ack, just send an ack back
 			ackMessage := utils.Message{
-				Type:          utils.Ping,
+				Type:          utils.Pong,
 				InfoMap:       s.Membership.GetInfoMap(), // use the latest info map for faster convergence
-				SenderInfo:    myInfo,
+				SenderInfo:    message.SenderInfo,
 				TargetInfo:    message.RequesterInfo,
 				RequesterInfo: message.RequesterInfo,
 			}
