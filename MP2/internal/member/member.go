@@ -165,6 +165,28 @@ func (m *Membership) Cleanup(currentTime time.Time, Tcleanup time.Duration) {
 	}
 }
 
+func (m *Membership) RemoveMember(id uint64) {
+	// remove a member completely (for voluntary leave)
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	
+	// Remove from InfoMap
+	delete(m.InfoMap, id)
+	
+	// Remove from Members list
+	for i, memberId := range m.Members {
+		if memberId == id {
+			m.Members = append(m.Members[:i], m.Members[i+1:]...)
+			break
+		}
+	}
+	
+	// Reset round robin index if needed
+	if m.roundRobinIndex >= len(m.Members) {
+		m.roundRobinIndex = 0
+	}
+}
+
 func (m *Membership) String() string {
 	res := "Membership:\n"
 	m.lock.RLock()

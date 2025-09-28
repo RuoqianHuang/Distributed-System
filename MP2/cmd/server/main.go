@@ -132,19 +132,10 @@ func (s *Server) leaveGroup() {
 	for _, info := range infoMap {
 		if info.State == member.Alive && info.Hostname != s.Info.Hostname {
 			leaveMessage := utils.Message{
-				Type:       utils.Gossip, // Use gossip to propagate leave
+				Type:       utils.Leave,
 				SenderInfo: s.Info,
 				TargetInfo: info,
-				InfoMap:    map[uint64]member.Info{
-					s.Id: {
-						Hostname:  s.Info.Hostname,
-						Port:      s.Info.Port,
-						Version:   s.Info.Version,
-						Timestamp: time.Now(),
-						Counter:   s.Info.Counter,
-						State:     member.Failed, // Mark as failed for leave
-					},
-				},
+				InfoMap:    make(map[uint64]member.Info), // Empty map
 			}
 			utils.SendMessage(leaveMessage, info.Hostname, info.Port)
 		}
@@ -414,6 +405,11 @@ func (s *Server) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 			case utils.Ping, utils.Pong, utils.PingReq:
 				size := s.swim.HandleIncomingMessage(message, s.Info)
 				s.OutFlow.Add(size)
+			case utils.Leave:
+				// Handle voluntary leave - remove the sender from membership
+				senderId := member.HashInfo(message.SenderInfo)
+				s.membership.RemoveMember(senderId)
+				log.Printf("Node %s voluntarily left the group", message.SenderInfo.String())
 			case utils.Probe:
 				// someone want to join the group, send some information back
 				log.Printf("Receive probe message: %v", message)

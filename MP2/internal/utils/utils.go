@@ -46,6 +46,7 @@ const (
 	ProbeAckSwim
 	UseSwim
 	UseGossip
+	Leave // message for voluntary leave
 )
 
 // Message data type for transmission
