@@ -571,7 +571,7 @@ func main() {
 	Tround := time.Second / 10
 	Tsuspect := Tround * 10
 	Tfail := Tround * 10
-	Tcleanup := Tround * 100 // don't cleanup too fast, I need this to record FP rate
+	Tcleanup := Tround * 300 // don't cleanup too fast, I need this to record FP rate and other stuff
 	TpingFail := Tround * 5
 	TpingReqFail := Tround * 5
 

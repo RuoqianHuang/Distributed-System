@@ -144,7 +144,7 @@ func test(numOfFailure int, mode Args) {
 	log.Printf("Wait 10s for every thing to become stable.")
 	startTime := time.Now() // wait 10s for every thing to become stable
 	for {
-		if time.Since(startTime) > 10 * time.Second {
+		if time.Since(startTime) > 10*time.Second {
 			break
 		}
 	}
@@ -176,6 +176,7 @@ func test(numOfFailure int, mode Args) {
 
 	var firstDetectMap map[uint64]time.Time = make(map[uint64]time.Time)
 	var finalDetectMap map[uint64]time.Time = make(map[uint64]time.Time)
+	var detectCount map[uint64]map[string]int = make(map[uint64]map[string]int)
 	for range ticker.C {
 
 		// set mode
@@ -183,19 +184,18 @@ func test(numOfFailure int, mode Args) {
 			result := new(string)
 			CallWithTimeout(hostname, 12345, mode, result)
 		}
-		if time.Since(startTime) > time.Second * 3 {
+		if time.Since(startTime) > time.Second*30 {
 			break
 		}
-		var detectCount map[uint64]int = make(map[uint64]int)
+
 		for _, hostname := range utils.HOSTS {
 			result := new(map[uint64]member.Info)
-			args := Args{}
-			getTableWithTimeout(hostname, 12345, args, result)
+			getTableWithTimeout(hostname, 12345, Args{}, result)
 			for id, info := range *result {
 				if info.State != member.Failed {
 					continue
 				}
-				startTime, ok := detectTime[id]
+				_, ok := detectTime[id]
 				if !ok {
 					continue
 				}
@@ -203,32 +203,52 @@ func test(numOfFailure int, mode Args) {
 				_, detected := firstDetectMap[id]
 				if !detected {
 					firstDetectMap[id] = time.Now()
-					log.Printf("Node %s:%d failed after %v, from %s", info.Hostname, info.Port, time.Since(startTime), hostname)
+					// log.Printf("Node %s:%d failed after %v, from %s", info.Hostname, info.Port, time.Since(startTime), hostname)
 				}
 
 				// count detect times
-				val, ok := detectCount[id]
+				_, ok = detectCount[id]
 				if ok {
-					detectCount[id] = val + 1
+					detectCount[id][hostname] = 1
 				} else {
-					detectCount[id] = 1
+					detectCount[id] = make(map[string]int)
+					detectCount[id][hostname] = 1
 				}
+				
 			}
 		}
-		for id, timestamp := range detectTime {
-			cnt, ok := detectCount[id]
-			if ok && cnt == 10 {
+		for id := range detectTime {
+			mp, ok := detectCount[id]
+			if ok && len(mp) == 10 {
 				_, exist := finalDetectMap[id]
 				if !exist {
-					log.Printf("Final detect time for ID %d is %v", id, time.Since(timestamp))
+					// log.Printf("Final detect time for ID %d is %v", id, time.Since(timestamp))
 					finalDetectMap[id] = time.Now()
 				}
 			}
 		}
 		if len(finalDetectMap) == len(detectTime) {
+			log.Printf("All %d failures are detected by all nodes\n", len(detectTime))
 			break
 		}
 	}
+	var firstDT time.Duration = 0 * time.Second
+	var finalDT time.Duration = 0 * time.Second
+	for id, dTime := range detectTime {
+		fTime, ok := firstDetectMap[id]
+		if ok && firstDT < fTime.Sub(dTime) {
+			firstDT = fTime.Sub(dTime)
+		}
+	}
+
+	for id, dTime := range detectTime {
+		fTime, ok := finalDetectMap[id]
+		if ok && finalDT < fTime.Sub(dTime) {
+			finalDT = fTime.Sub(dTime)
+		}
+	}
+
+	log.Printf("First Detection Time: %v, Final detection Time: %v\n", firstDT, finalDT)
 }
 
 func main() {

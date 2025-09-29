@@ -6,7 +6,7 @@ server: ./cmd/server/main.go
 client: ./cmd/client/main.go
 	go build -o ./bin/client ./cmd/client
 
-pltoa: ./cmd/plota/main.go
+plota: ./cmd/plota/main.go
 	go build -o ./bin/plota ./cmd/plota
 
 plotb: ./cmd/plotb/main.go

@@ -8,6 +8,7 @@ import (
 	"net/rpc"
 	"os"
 	"time"
+	"math"
 )
 
 const (
@@ -79,6 +80,32 @@ func getFlowWithTimeout(
 	return nil
 }
 
+func CalculateStats(data []float64) (mean, stdDev float64, err error) {
+	if len(data) == 0 {
+		return 0.0, 0.0, fmt.Errorf("input slice cannot be empty")
+	}
+
+	// Calculate the sum for average calculation
+	sum := 0.0
+	for _, value := range data {
+		sum += value
+	}
+	mean = sum / float64(len(data))
+
+	// calculate the sum of squared differences from the average.
+	squaredDiffSum := 0.0
+	for _, value := range data {
+		diff := value - mean
+		squaredDiffSum += diff * diff
+	}
+
+	// 4. Calculate the variance and then the standard deviation.
+	variance := squaredDiffSum / float64(len(data))
+	stdDev = math.Sqrt(variance)
+
+	return mean, stdDev, nil
+}
+
 func test(n int, mode Args) {
 	// restart all nodes
 	for i, hostname := range utils.HOSTS {
@@ -142,13 +169,20 @@ func test(n int, mode Args) {
 		log.Printf("Let %s leave\n", hostname)
 	}
 
+	log.Printf("Wait 10s for every thing to become stable.")
+	startTime = time.Now() // wait 10s for every thing to become stable
+	for {
+		if time.Since(startTime) > 10 * time.Second {
+			break
+		}
+	}
+
 	ticker := time.NewTicker(time.Second / 10)
 	log.Printf("Start experimenting with %d machines for 10s\n", n)
 	// start testing for 10 s
 	startTime = time.Now()
 
-	var total_flow float64 = 0.0
-	var sample_cnt int = 0
+	var totalFlows []float64 = make([]float64, 0, 1024)
 	for range ticker.C {
 		// set mode
 		for _, hostname := range curHosts {
@@ -164,12 +198,15 @@ func test(n int, mode Args) {
 			result := new(float64)
 			args := Args{}
 			getFlowWithTimeout(hostname, 12345, args, result)
-			total_flow += *result
-			sample_cnt += 1
+			totalFlows = append(totalFlows, *result)
 		}
 
 	}
-	log.Printf("Average flow in 10s: %f\n", total_flow/float64(sample_cnt))
+	avg, std, err := CalculateStats(totalFlows)
+	if err != nil {
+		log.Fatal("fail to calculate average and std.")
+	}
+	log.Printf("Average flow in 10s: %f, std: %f\n", avg, std)
 }
 
 func main() {
