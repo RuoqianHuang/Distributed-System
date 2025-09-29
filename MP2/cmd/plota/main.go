@@ -29,7 +29,7 @@ func CallWithTimeout(
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
 	}
 	defer conn.Close()
 
@@ -42,10 +42,10 @@ func CallWithTimeout(
 	select {
 	case err := <-callChan:
 		if err != nil {
-			return err
+			return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
 		}
 	case <-time.After(CALL_TIMEOUT):
-		return fmt.Errorf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("rpc call to server %s:%d timed out", hostname, port)
 	}
 	return nil
 }
@@ -58,7 +58,7 @@ func getFlowWithTimeout(
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
 	}
 	defer conn.Close()
 
@@ -71,36 +71,50 @@ func getFlowWithTimeout(
 	select {
 	case err := <-callChan:
 		if err != nil {
-			return err
+			return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
 		}
 	case <-time.After(CALL_TIMEOUT):
-		return fmt.Errorf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("rpc call to server %s:%d timed out", hostname, port)
 	}
 	return nil
 }
 
 func test(n int, mode Args) {
 	// restart all nodes
-	for _, hostname := range utils.HOSTS {
+	for i, hostname := range utils.HOSTS {
 		result := new(string)
 		args := Args{
 			Command: "stop",
 		}
 		CallWithTimeout(hostname, 12345, args, result)
-		log.Printf("Restart %s\n", hostname)
-		currentTime := time.Now()
-		// wait 3s
-		for {
-			if time.Since(currentTime) > 3*time.Second {
-				break
+		// log.Printf("Restart %s\n", hostname)
+
+		if i == 0 {
+			currentTime := time.Now()
+			// wait 3s only for the first one
+			for {
+				if time.Since(currentTime) > 3*time.Second {
+					break
+				}
 			}
 		}
+	}
+
+	// set mode and drop rate to 0
+	for _, hostname := range utils.HOSTS {
+		result := new(string)
+		args := Args{
+			Command: "set_drop_rate",
+			Rate:    0.0,
+		}
+		CallWithTimeout(hostname, 12345, args, result)
+		CallWithTimeout(hostname, 12345, mode, result)
 	}
 
 	log.Printf("Wait 10s for every thing to become stable.")
 	startTime := time.Now() // wait 10s for every thing to become stable
 	for {
-		if time.Since(startTime) > 10*time.Second {
+		if time.Since(startTime) > 10 * time.Second {
 			break
 		}
 	}

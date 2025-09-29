@@ -26,12 +26,11 @@ func CallWithTimeout(
 	hostname string,
 	port int,
 	args Args,
-	result *string) {
+	result *string) error {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		// log.Printf("Failed to dial server %s:%d: %s\n", hostname, port, err.Error())
-		return
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
 	}
 	defer conn.Close()
 
@@ -44,23 +43,23 @@ func CallWithTimeout(
 	select {
 	case err := <-callChan:
 		if err != nil {
-			// log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
+			return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
 		}
 	case <-time.After(CALL_TIMEOUT):
-		// log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("rpc call to server %s:%d timed out", hostname, port)
 	}
+	return nil
 }
 
 func getTableWithTimeout(
 	hostname string,
 	port int,
 	args Args,
-	result *map[uint64]member.Info) {
+	result *map[uint64]member.Info) error {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		// log.Printf("Failed to dial server %s:%d: %s\n", hostname, port, err.Error())
-		return
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
 	}
 	defer conn.Close()
 
@@ -73,15 +72,29 @@ func getTableWithTimeout(
 	select {
 	case err := <-callChan:
 		if err != nil {
-			// log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
+			return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
 		}
 	case <-time.After(CALL_TIMEOUT):
-		// log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("rpc call to server %s:%d timed out", hostname, port)
 	}
-
+	return nil
 }
 
 func test(rate float64, mode Args) {
+
+	// set drop rate to zero and gossip mode
+	for _, hostname := range utils.HOSTS {
+		result := new(string)
+		args := Args{
+			Command: "set_drop_rate",
+			Rate:    0.0,
+		}
+		m := Args{
+			Command: "switch(gossip,suspect)",
+		}
+		CallWithTimeout(hostname, 12345, args, result)
+		CallWithTimeout(hostname, 12345, m, result)
+	}
 
 	log.Printf("Wait 10s for every thing to become stable.")
 	startTime := time.Now() // wait 10s for every thing to become stable

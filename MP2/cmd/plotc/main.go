@@ -26,12 +26,11 @@ func CallWithTimeout(
 	hostname string,
 	port int,
 	args Args,
-	result *string) {
+	result *string) error {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		// log.Printf("Failed to dial server %s:%d: %s\n", hostname, port, err.Error())
-		return
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
 	}
 	defer conn.Close()
 
@@ -44,23 +43,23 @@ func CallWithTimeout(
 	select {
 	case err := <-callChan:
 		if err != nil {
-			// log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
+			return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
 		}
 	case <-time.After(CALL_TIMEOUT):
-		// log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("rpc call to server %s:%d timed out", hostname, port)
 	}
+	return nil
 }
 
 func getTableWithTimeout(
 	hostname string,
 	port int,
 	args Args,
-	result *map[uint64]member.Info) {
+	result *map[uint64]member.Info) error {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		// log.Printf("Failed to dial server %s:%d: %s\n", hostname, port, err.Error())
-		return
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
 	}
 	defer conn.Close()
 
@@ -73,31 +72,76 @@ func getTableWithTimeout(
 	select {
 	case err := <-callChan:
 		if err != nil {
-			// log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
+			return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
 		}
 	case <-time.After(CALL_TIMEOUT):
-		// log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
+		return fmt.Errorf("rpc call to server %s:%d timed out", hostname, port)
 	}
+	return nil
+}
 
+func getIdWithTimeout(
+	hostname string,
+	port int,
+	args Args,
+	result *uint64) error {
+
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
+	if err != nil {
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
+	}
+	defer conn.Close()
+
+	client := rpc.NewClient(conn)
+	callChan := make(chan error, 1)
+
+	go func() {
+		callChan <- client.Call("Server.GetId", args, result)
+	}()
+	select {
+	case err := <-callChan:
+		if err != nil {
+			return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
+		}
+	case <-time.After(CALL_TIMEOUT):
+		return fmt.Errorf("rpc call to server %s:%d timed out", hostname, port)
+	}
+	return nil
 }
 
 func test(numOfFailure int, mode Args) {
-	// restart server
-	for _, hostname := range utils.HOSTS[1:] {
+	// restart all nodes
+	for i, hostname := range utils.HOSTS {
 		result := new(string)
 		args := Args{
 			Command: "stop",
 		}
 		CallWithTimeout(hostname, 12345, args, result)
-		log.Printf("restart server, Hostname: %s\n", hostname)
-		startTime := time.Now() // wait 3s
-		for {
-			if time.Since(startTime) > 3*time.Second {
-				break
+		// log.Printf("Restart %s\n", hostname)
+
+		if i == 0 {
+			currentTime := time.Now()
+			// wait 3s only for the first one
+			for {
+				if time.Since(currentTime) > 3*time.Second {
+					break
+				}
 			}
 		}
 	}
-	
+
+	// set mode and drop rate to 0
+	for _, hostname := range utils.HOSTS {
+		result := new(string)
+		args := Args{
+			Command: "set_drop_rate",
+			Rate:    0.0,
+		}
+		CallWithTimeout(hostname, 12345, args, result)
+		CallWithTimeout(hostname, 12345, mode, result)
+	}
+
+	log.Printf("Wait 10s for every thing to become stable.")
 	startTime := time.Now() // wait 10s for every thing to become stable
 	for {
 		if time.Since(startTime) > 10 * time.Second {
@@ -105,22 +149,33 @@ func test(numOfFailure int, mode Args) {
 		}
 	}
 
-	for i := 0; i < numOfFailure; i++ {
-		// let machine utils.HOST[9 - i] leave the group
-		args := Args{
-			Command: "leave",
+	var detectTime map[uint64]time.Time = make(map[uint64]time.Time)
+	offHosts := utils.HOSTS[10-numOfFailure:]
+	// stop these nodes and detect
+	for _, hostname := range offHosts {
+		currentTime := time.Now()
+		Id := new(uint64)
+		err := getIdWithTimeout(hostname, 12345, Args{}, Id)
+		if err != nil {
+			log.Fatalf("fail to get Id from %s: %s\n", hostname, err.Error())
+		} else {
+			detectTime[*Id] = currentTime
 		}
 		result := new(string)
-		CallWithTimeout(utils.HOSTS[9 - i], 12345, args, result)
-		log.Printf("Let %s leave the group: %s", utils.HOSTS[9 - i], *result)
+		args := Args{
+			Command: "stop",
+		}
+		CallWithTimeout(hostname, 12345, args, result)
+		log.Printf("stop %s\n", hostname)
 	}
-	
+
 	ticker := time.NewTicker(time.Second / 10)
 	log.Printf("Start experimenting with %d simultaneous failures\n", numOfFailure)
-	// collect result for 10 s
+	// collect result for 3 s
 	startTime = time.Now()
 
-	var failure_map map[uint64]member.Info = make(map[uint64]member.Info)
+	var firstDetectMap map[uint64]time.Time = make(map[uint64]time.Time)
+	var finalDetectMap map[uint64]time.Time = make(map[uint64]time.Time)
 	for range ticker.C {
 
 		// set mode
@@ -128,27 +183,52 @@ func test(numOfFailure int, mode Args) {
 			result := new(string)
 			CallWithTimeout(hostname, 12345, mode, result)
 		}
-
-		if time.Since(startTime) > time.Second * 10 {
+		if time.Since(startTime) > time.Second * 3 {
 			break
 		}
-
+		var detectCount map[uint64]int = make(map[uint64]int)
 		for _, hostname := range utils.HOSTS {
 			result := new(map[uint64]member.Info)
 			args := Args{}
 			getTableWithTimeout(hostname, 12345, args, result)
 			for id, info := range *result {
-				// log.Printf("failed %v\n", info)
-				_, ok := failure_map[id]
-				if info.State == member.Failed && !ok {
-					log.Printf("Node %s:%d failed after %v", info.Hostname, info.Port, time.Since(startTime))
-					failure_map[id] = info
+				if info.State != member.Failed {
+					continue
+				}
+				startTime, ok := detectTime[id]
+				if !ok {
+					continue
+				}
+				// detect for first time
+				_, detected := firstDetectMap[id]
+				if !detected {
+					firstDetectMap[id] = time.Now()
+					log.Printf("Node %s:%d failed after %v, from %s", info.Hostname, info.Port, time.Since(startTime), hostname)
+				}
+
+				// count detect times
+				val, ok := detectCount[id]
+				if ok {
+					detectCount[id] = val + 1
+				} else {
+					detectCount[id] = 1
 				}
 			}
 		}
-
+		for id, timestamp := range detectTime {
+			cnt, ok := detectCount[id]
+			if ok && cnt == 10 {
+				_, exist := finalDetectMap[id]
+				if !exist {
+					log.Printf("Final detect time for ID %d is %v", id, time.Since(timestamp))
+					finalDetectMap[id] = time.Now()
+				}
+			}
+		}
+		if len(finalDetectMap) == len(detectTime) {
+			break
+		}
 	}
-	log.Printf("Total failure count: %d\n", len(failure_map))
 }
 
 func main() {
@@ -163,8 +243,8 @@ func main() {
 		Command: fmt.Sprintf("switch(%s,%s)", protocol, sus),
 	}
 
-	for _, rate := range []float64{0.0, 0.1, 0.2, 0.3, 0.4, 0.5} {
-		test(rate, mode)
+	for _, n := range []int{1, 2, 3, 4, 5} {
+		test(n, mode)
 	}
 
 }

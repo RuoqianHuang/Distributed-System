@@ -57,6 +57,13 @@ type Args struct {
 	Rate    float64
 }
 
+func (s *Server) GetId(args Args, reply *uint64) error {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+	*reply = s.Id
+	return nil
+}
+
 func (s *Server) MemberTable(args Args, reply *map[uint64]member.Info) error {
 	res := s.membership.GetInfoMap()
 	*reply = res
@@ -562,11 +569,11 @@ func main() {
 	cliPort := 12345
 	serverPort := utils.DEFAULT_PORT
 	Tround := time.Second / 10
-	Tsuspect := Tround * 15
-	Tfail := Tround * 15
+	Tsuspect := Tround * 10
+	Tfail := Tround * 10
 	Tcleanup := Tround * 100 // don't cleanup too fast, I need this to record FP rate
-	TpingFail := Tround * 10
-	TpingReqFail := Tround * 10
+	TpingFail := Tround * 5
+	TpingReqFail := Tround * 5
 
 	// parse command line arguments
 	if len(os.Args) >= 2 {
