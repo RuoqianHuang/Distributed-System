@@ -1,0 +1,52 @@
+---
+# This playbook starts services in a three-phase, staggered rollout.
+
+# =================================================================
+# PLAY 1: Start the introducer node immediately
+# =================================================================
+- hosts: introducer
+  become: yes
+  vars:
+    service_name: "MP2_server"
+    binary_path: "./bin/server"
+    remote_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: "Start service on the introducer node"
+      include_tasks: task_deploy.yml
+
+# =================================================================
+# PLAY 2: Start the middle group after a 5-second delay
+# =================================================================
+- hosts: mid_group
+  become: yes
+  vars:
+    service_name: "MP2_server"
+    binary_path: "./bin/server"
+    remote_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: "Wait for 5 seconds"
+      pause:
+        seconds: 5
+
+    - name: "Start services on the middle group"
+      include_tasks: task_deploy.yml
+
+# =================================================================
+# PLAY 3: Start the late group after another 10-second delay
+# =================================================================
+- hosts: late_group
+  become: yes
+  vars:
+    service_name: "MP2_server"
+    binary_path: "./bin/server"
+    remote_user: "{{ lookup('env', 'USER') }}"
+
+  tasks:
+    - name: "Wait for 10 seconds"
+      pause:
+        seconds: 10
+
+    - name: "Start services on the late group"
+      include_tasks: task_deploy.yml
