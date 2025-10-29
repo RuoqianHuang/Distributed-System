@@ -1,0 +1,27 @@
+---
+- hosts: my_servers
+  become: yes
+  vars:
+    service_name: "MP3_server"
+
+  tasks:
+    - name: "Stop and disable the service"
+      systemd:
+        name: "{{ service_name }}"
+        state: stopped
+        enabled: no
+      ignore_errors: yes # Ignore errors if the service doesn't exist
+
+    - name: "Remove the systemd service file"
+      file:
+        path: "/etc/systemd/system/{{ service_name }}.service"
+        state: absent
+
+    - name: "Remove the binary file"
+      file:
+        path: "/usr/local/bin/{{ service_name }}"
+        state: absent
+
+    - name: "Reload systemd to apply changes"
+      systemd:
+        daemon_reload: yes

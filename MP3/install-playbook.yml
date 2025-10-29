@@ -1,0 +1,32 @@
+---
+# This playbook deploys the service to the first node as an introducer
+# then waits before deploying to all other nodes.
+
+
+# play 1: Deploy to the introducer node ONLY
+- hosts: fa25-cs425-b601.cs.illinois.edu # Target the specific introducer node
+  become: yes
+  vars:
+    service_name: "MP3_server"
+    binary_path: "./bin/server"
+    remote_user: "{{ lookup('env', 'USER') }}"
+  
+  tasks:
+    - name: "Run deployment tasks on the introducer node"
+      include_tasks: task_deploy.yml
+
+# play 1: Deploy other nodes after a delay
+- hosts: my_servers:!fa25-cs425-b601.cs.illinois.edu # Target all others
+  become: yes
+  vars:
+    service_name: "MP3_server"
+    binary_path: "./bin/server"
+    remote_user: "{{ lookup('env', 'USER') }}"
+  
+  tasks:
+    - name: "Wait for 5 seconds before deploying to other nodes"
+      pause:
+        seconds: 5
+
+    - name: "Run deployment tasks on the remaining nodes"
+      include_tasks: task_deploy.yml
