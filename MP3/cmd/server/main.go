@@ -2,8 +2,11 @@ package main
 
 import (
 	"cs425/mp3/internal/detector"
+	"cs425/mp3/internal/distributed"
+	"cs425/mp3/internal/files"
 	"cs425/mp3/internal/flow"
 	"cs425/mp3/internal/member"
+	"cs425/mp3/internal/queue"
 	"cs425/mp3/internal/utils"
 	"fmt"
 	"log"
@@ -16,18 +19,18 @@ import (
 	"time"
 )
 
-const RPC_PORT = 12345
-
 type Server struct {
-	failureDetector   *detector.FD
-	InFlow            *flow.FlowCounter
-	OutFlow           *flow.FlowCounter
+	failureDetector *detector.FD
+	distributed     *distributed.DistributedFiles
+	fileManager     *files.FileManager
+	InFlow          *flow.FlowCounter
+	OutFlow         *flow.FlowCounter
 }
 
-
-
 type Args struct {
-	Command string
+	Command    string
+	Filename   string
+	FileSource string
 }
 
 func (s *Server) CLI(args Args, reply *string) error {
@@ -37,37 +40,73 @@ func (s *Server) CLI(args Args, reply *string) error {
 		*reply = "\n" + member.CreateTable(infoMap)
 	case "status":
 		infoMap := s.failureDetector.Membership.GetInfoMap()
-		*reply = fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Input: %f bytes/s, Output: %f bytes/s\n", 
+		*reply = fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Input: %f bytes/s, Output: %f bytes/s\n",
 			s.failureDetector.Info.Id, s.failureDetector.Info.Hostname, s.failureDetector.Info.Port, s.InFlow.Get(), s.OutFlow.Get()) + member.CreateTable(infoMap)
+	case "files":
+		fileMap := s.distributed.CollectMeta()
+		*reply = fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Input: %f bytes/s, Output: %f bytes/s\n",
+			s.failureDetector.Info.Id, s.failureDetector.Info.Hostname, s.failureDetector.Info.Port, s.InFlow.Get(), s.OutFlow.Get()) + files.CreateTable(fileMap)
+	case "create":
+		err := s.distributed.Create(args.Filename, args.FileSource, 2)
+		if err != nil {
+			*reply = fmt.Sprintf("Failed to create file %s: %s", args.Filename, err.Error())
+		} else {
+			*reply = "File created successfully!"
+		}
+	case "get":
+		err := s.distributed.Get(args.Filename, args.FileSource, 2)
+		if err != nil {
+			*reply = fmt.Sprintf("Failed to download %s: %s", args.Filename, err.Error())
+		} else {
+			*reply = fmt.Sprintf("File download to %s successfully!", args.FileSource)
+		}
+	case "append":
+		err := s.distributed.Append(args.Filename, args.FileSource, 2)
+		if err != nil {
+			*reply = fmt.Sprintf("Failed to appedn %s: %s", args.Filename, err.Error())
+		} else {
+			*reply = fmt.Sprintf("%s append successfully!", args.Filename)
+		}
 	default:
 		*reply = "Unknown command."
 	}
-
 	return nil
 }
 
-func (s *Server) Start() {
-	// register rpc
+func (s *Server) registerRPC() {
+	s.fileManager.RegisterRPC()
+	s.distributed.RegisterRPC()
 	rpc.Register(s)
-	tcpListener, err := net.Listen("tcp", fmt.Sprintf(":%d", RPC_PORT))
+}
+
+func (s *Server) Start(rpcPort int) {
+	// Register rpc
+	s.registerRPC()
+	// Create TCP listener
+	tcpListener, err := net.Listen("tcp", fmt.Sprintf(":%d", rpcPort))
 	if err != nil {
 		log.Fatalf("[Main] TCP Listen failed: %s", err.Error())
 	}
 	defer tcpListener.Close()
 	// start tcp listener
 	go func() {
-		log.Printf("[Main] TCP RPC service lsitening on port %d", RPC_PORT)
+		log.Printf("[Main] TCP RPC service lsitening on port %d", rpcPort)
 		rpc.Accept(tcpListener)
 	}()
 	waitGroup := new(sync.WaitGroup)
-	
+
 	// Start failure detector
 	waitGroup.Add(1)
-	go func() { 
+	go func() {
 		defer waitGroup.Done()
 		s.failureDetector.Start()
 	}()
+
 	// Start distributed file system
+	go func() {
+		defer waitGroup.Done()
+		s.distributed.Start()
+	}()
 
 	waitGroup.Wait()
 }
@@ -83,7 +122,7 @@ func main() {
 	}()
 
 	// some default parameters
-	serverPort := utils.DEFAULT_PORT
+	udpPort := utils.DEFAULT_PORT
 	Tround := time.Second / 10
 	Tsuspect := Tround * 10
 	Tfail := Tround * 10
@@ -98,7 +137,7 @@ func main() {
 					log.Printf("[Main] Error: -p flag requires a port number argument.")
 					os.Exit(1)
 				}
-				_, err := fmt.Sscanf(os.Args[i+1], "%d", &serverPort)
+				_, err := fmt.Sscanf(os.Args[i+1], "%d", &udpPort)
 				if err != nil {
 					log.Printf("[Main] Error: invalid port number %s", os.Args[i+1])
 					os.Exit(1)
@@ -109,6 +148,8 @@ func main() {
 			}
 		}
 	}
+	// use udp port + 1 as rpc port
+	rpcPort := udpPort + 1
 
 	// setup logger
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -121,7 +162,7 @@ func main() {
 
 	myInfo := member.Info{
 		Hostname:  hostname,
-		Port:      serverPort,
+		Port:      udpPort,
 		Version:   time.Now(),
 		Timestamp: time.Now(),
 		Counter:   0,
@@ -135,7 +176,7 @@ func main() {
 		InfoMap: map[uint64]member.Info{
 			myId: myInfo,
 		},
-		Members: []uint64{myId},
+		Members:       []uint64{myId},
 		SortedMembers: []uint64{myId},
 	}
 
@@ -156,13 +197,37 @@ func main() {
 		OutFlow:    &outFlow,
 	}
 
+	// create local file manager
+	fileManager := files.NewFileManager()
+
+	// create distributed file system
+	distributed := distributed.DistributedFiles{
+		Tround:               time.Second / 2,
+		Hostname:             hostname,
+		Port:                 myInfo.Port,
+		FileManager:          fileManager,
+		Membership:           &membership,
+		NumOfReplicas:        3,
+		NumOfMetaWorkers:     1,
+		NumOfBlockWorkers:    2,
+		NumOfBufferedWorkers: 2,
+		NumOfTries:           3,
+		MetaJobs:             queue.NewQueue(),
+		BlockJobs:            queue.NewQueue(),
+		BufferedBlocks:       queue.NewQueue(),
+		BufferedBlockMap:     make(map[uint64]distributed.BufferedBlock),
+		LockedMeta:           make(map[uint64]files.Meta),
+	}
+
 	// Create Server
 	server := Server{
+		distributed:     &distributed,
+		fileManager:     fileManager,
 		failureDetector: &failureDetector,
-		InFlow: &inFlow,
-		OutFlow: &outFlow,
+		InFlow:          &inFlow,
+		OutFlow:         &outFlow,
 	}
 
 	// start
-	server.Start()
+	server.Start(rpcPort)
 }
