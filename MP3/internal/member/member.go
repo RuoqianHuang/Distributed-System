@@ -54,19 +54,18 @@ func (i *Info) String() string {
 
 func (m *Membership) updateMember() {
 	m.Members = make([]uint64, 0, len(m.InfoMap))
-	m.SortedMembers = make([]uint64, 0, len(m.InfoMap))
 	for id, info := range m.InfoMap {
 		if info.State != Failed {
 			m.Members = append(m.Members, id)
 		}
 	}
-	copy(m.Members, m.SortedMembers) // sorted members for ring search
+	m.SortedMembers = make([]uint64, len(m.Members))
+	copy(m.SortedMembers, m.Members) // sorted members for ring search
 	sort.Slice(m.SortedMembers, func(i, j int) bool {
 		return m.SortedMembers[i] < m.SortedMembers[j]
 	})
 	RandomPermutation(&m.Members) // randomize member ids for gossip
 	m.roundRobinIndex = 0         // reset round robin index
-	
 }
 
 func (m *Membership) Merge(memberInfo map[uint64]Info, currentTime time.Time) bool {
@@ -248,7 +247,7 @@ func (m *Membership) GetReplicas(id uint64, numReplica int) ([]Info, error) {
 	defer m.lock.RUnlock()
 	n := len(m.SortedMembers)
 	if n < numReplica {
-		return []Info{}, fmt.Errorf("no enough member")
+		return []Info{}, fmt.Errorf("no enough member, only %d members", n)
 	}
 	if id > m.SortedMembers[n - 1] {
 		ret := make([]Info, 0, numReplica)

@@ -4,14 +4,16 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"net/rpc"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 )
 
-const FILE_SERVICE_PORT = 2121     // Port for file service
-const BLOCK_SIZE = 4 * 1024 * 1024 // 4 MiB 
+const BLOCK_SIZE = 1024 * 1024 * 2 // 2 MiB
 
-type File struct {
+type Meta struct {
 	Id         uint64   // File ID
 	FileSize   uint64   // File size
 	FileName   string   // File name
@@ -19,7 +21,23 @@ type File struct {
 	Counter    uint64   // File version counter
 }
 
-func (f *File) GetBlock(i int) (BlockInfo, error) {
+func GetIdFromFilename(filename string) uint64 {
+	hash := sha256.Sum256([]byte(filename))
+	return uint64(binary.BigEndian.Uint64(hash[:8]))
+}
+
+func CreateMeta(filename string, fileSize uint64) Meta {
+	hash := sha256.Sum256([]byte(filename))
+	return Meta{
+		Id: uint64(binary.BigEndian.Uint64(hash[:8])),
+		FileName: filename,
+		FileSize:  fileSize,
+		FileBlocks: int((fileSize - 1) / BLOCK_SIZE + 1), // Ceil(fileSize / BLOCK_SIZE)
+		Counter: 1, // Counter + 1 on created
+	}
+}
+
+func (f *Meta) GetBlock(i int) (BlockInfo, error) {
 	if i >= f.FileBlocks {
 		return BlockInfo{}, fmt.Errorf("block does not exist")
 	}
@@ -42,6 +60,11 @@ type BlockInfo struct {
 type Block struct {
 	BlockInfo   BlockInfo    // Block Info
 	lock        sync.RWMutex // RW mutex for Counter and File read write
+}
+
+type BlockPackage struct {
+	BlockInfo     BlockInfo  // Information about the requested block
+	Data          []byte     // Data of the block
 }
 
 func (b *Block) Write(data []byte, Counter uint64) (uint64, error) {
@@ -77,12 +100,15 @@ func (b *Block) UpdateCounter(Counter uint64) uint64 {
 	return b.BlockInfo.Counter
 }
 
-func (b *Block) Read() (uint64, []byte, error) {
+func (b *Block) Read() (BlockPackage, error) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 	filename := fmt.Sprintf("%s-%d.block", b.BlockInfo.FileName, b.BlockInfo.Id)
 	res, err := os.ReadFile(filename) // Read file
-	return b.BlockInfo.Counter, res, err
+	return BlockPackage{
+		BlockInfo: b.BlockInfo,
+		Data: res,
+	}, err
 }
 
 func (b *Block) GetCounter() uint64 {
@@ -99,14 +125,20 @@ func (b *Block) GetInfo() BlockInfo {
 
 type FileManager struct {
 	localBlocks     map[uint64]*Block    // Local file blocks
-	localFileMeta   map[uint64]File      // Local file metadata
+	localFileMeta   map[uint64]Meta      // Local file metadata
 	lock            sync.RWMutex         // RW mutex
 }
 
-type ArgsBlock struct {
-	Block BlockInfo  // Information about the requested block
-	Data  []byte     // Data of the block
-	HasData bool     // If has data, read/write data from/to file system
+func NewFileManager() *FileManager {
+	return &FileManager{
+		localBlocks: make(map[uint64]*Block),
+		localFileMeta: make(map[uint64]Meta),
+	}
+}
+
+// Functions for local calls
+func (f *FileManager) RegisterRPC() {
+	rpc.Register(f)
 }
 
 func (f *FileManager) GetBlocks() map[uint64]BlockInfo {
@@ -120,10 +152,20 @@ func (f *FileManager) GetBlocks() map[uint64]BlockInfo {
 	return ret
 }
 
-func (f *FileManager) GetFiles() map[uint64]File {
+func (f *FileManager) GetBlock(id uint64) (*Block, error) {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
-	ret := make(map[uint64]File, len(f.localFileMeta))
+	ret, ok := f.localBlocks[id]
+	if ok {
+		return ret, nil
+	}
+	return nil, fmt.Errorf("no such block")
+}
+
+func (f *FileManager) GetMetas() map[uint64]Meta {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+	ret := make(map[uint64]Meta, len(f.localFileMeta))
 	for id, file := range f.localFileMeta {
 		// Copy the data from the internal map 
 		ret[id] = file
@@ -147,89 +189,222 @@ func (f *FileManager) RemoveMeta(Id uint64) {
 	delete(f.localFileMeta, Id)
 }
 
-func (f *FileManager) WriteBlock(args *ArgsBlock, reply *ArgsBlock) error {
-	f.lock.Lock()
-	// Update local info 
-	block, ok := f.localBlocks[args.Block.Id]
-	if !ok {
-		f.localBlocks[args.Block.Id] = &Block{ // Insert new empty block
-			BlockInfo: BlockInfo{
-				Id: args.Block.Id,
-				BlockNumber: args.Block.BlockNumber,
-				Counter: 0,
-				FileName: args.Block.FileName,
-			},
+// Functions for remote calls
+func (f *FileManager) ReadBlockInfo(id uint64, reply *BlockInfo) error {
+	f.lock.RLock()
+	block, ok := f.localBlocks[id]
+	f.lock.RUnlock()
+	if ok {
+		*reply = block.GetInfo()
+	} else {
+		*reply = BlockInfo{ // Return an empty block with counter = 0
+			Id: id,
+			Counter: 0,
 		}
-	}
-	f.lock.Unlock()
-
-	if args.HasData { // Write data to file system
-		// Write block to local file system
-		_, err := block.Write(args.Data, args.Block.Counter)
-		*reply = ArgsBlock{
-			Block: block.GetInfo(),
-			HasData: false,
-		}
-		return err
-	}
-	// Only update the counter
-	block.UpdateCounter(args.Block.Counter)
-	*reply = ArgsBlock{
-		Block: block.GetInfo(),
-		HasData: false,
 	}
 	return nil
 }
 
-func (f *FileManager) ReadBlock(args *ArgsBlock, reply *ArgsBlock) error {
+func (f *FileManager) WriteBlock(args BlockPackage, reply *uint64) error {
+	f.lock.Lock()
+	// Update local info 
+	block, ok := f.localBlocks[args.BlockInfo.Id]
+	if !ok {
+		block = &Block{ // Insert new empty block
+			BlockInfo: BlockInfo{
+				Id: args.BlockInfo.Id,
+				BlockNumber: args.BlockInfo.BlockNumber,
+				Counter: 0,
+				FileName: args.BlockInfo.FileName,
+			},
+		}
+		f.localBlocks[args.BlockInfo.Id] = block
+	}
+	f.lock.Unlock()
+
+	// Write block to local file system
+	cnt, err := block.Write(args.Data, args.BlockInfo.Counter)
+	*reply = cnt
+	return err
+}
+
+func (f *FileManager) ReadBlock(id uint64, reply *BlockPackage) error {
 	f.lock.RLock()
-	block, ok := f.localBlocks[args.Block.Id]
+	block, ok := f.localBlocks[id]
 	f.lock.RUnlock()
 	if !ok {
 		// Block does not exist, return empty block with counter = 0
-		*reply = ArgsBlock{
-			Block: BlockInfo{
-				Id: args.Block.Id,
-				BlockNumber: args.Block.BlockNumber,
+		*reply = BlockPackage{
+			BlockInfo: BlockInfo{
+				Id: id,
 				Counter: 0,
-				FileName: args.Block.FileName,
-			},	
-			HasData: false,
+			},
 		}
 		return nil
 	}
 	// Read from local file system
-	counter, data, err := block.Read()
-	if err != nil {
-		return err
-	}
-	reply.Data = data
-	reply.Block = block.GetInfo()
-	reply.Block.Counter = counter // Use the counter of the data read
-	reply.HasData = true
-	return nil
+	blockPack, err := block.Read()
+	*reply = blockPack
+	return err
 }
 
-func (f *FileManager) WriteMeta(file *File, reply *uint64) error {
+func (f *FileManager) WriteMeta(file Meta, reply *uint64) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	meta, ok := f.localFileMeta[file.Id]
 	if !ok {
-		f.localFileMeta[file.Id] = *file
+		f.localFileMeta[file.Id] = file
 	} else if meta.Counter < file.Counter {
-		f.localFileMeta[file.Id] = *file
+		f.localFileMeta[file.Id] = file
 	}
 	*reply = f.localFileMeta[file.Id].Counter
 	return nil
 }
 
-func (f *FileManager) ReadMeta(file *File, reply *File) error {
+func (f *FileManager) ReadMeta(id uint64, reply *Meta) error {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
-	meta, ok := f.localFileMeta[file.Id]
+	meta, ok := f.localFileMeta[id]
 	if !ok {
-		return fmt.Errorf("no such file")
+		*reply = Meta{ // Return a empty meta with counter = 0
+			Id: id,
+			Counter: 0,
+		}
+		return nil
 	} 
 	*reply = meta
 	return nil
 }
+
+
+func CreateTable(fileMap map[uint64]Meta) string {
+	type Pair struct {
+		Id       uint64
+		Filename string
+	}
+	metaList := make([]Pair, 0, 16)
+	for id, meta := range fileMap {
+		metaList = append(metaList, Pair{
+			Id:       id,
+			Filename: meta.FileName,
+		})
+	}
+	sort.Slice(metaList, func(i, j int) bool {
+		return metaList[i].Filename < metaList[j].Filename
+	})
+	// -----------------------------------------------------------
+	// | ID    | File name | File size | Num of blocks | Counter |
+	// | ID    | File name | File size | Num of blocks | Counter |
+	// -----------------------------------------------------------
+	maxLengths := map[string]int{
+		"Id":             2,
+		"File name":      9,
+		"File size":      9,
+		"Num of blocks":  13,
+		"Counter":        7,
+	}
+	for _, i := range metaList {
+		info := fileMap[i.Id]
+		lengths := map[string]int{
+			"Id":            len(fmt.Sprintf("%d", i.Id)),
+			"File name":     len(i.Filename),
+			"File size":     len(fmt.Sprintf("%f MiB", float64(info.FileSize) / BLOCK_SIZE)),
+			"Num of blocks": len(fmt.Sprintf("%d", info.FileBlocks)),
+			"Counter":       len(fmt.Sprintf("%d", info.Counter)),
+		}
+		for key, value := range lengths {
+			if maxLengths[key] < value {
+				maxLengths[key] = value
+			}
+		}
+	}
+	totalLength := 16
+	for _, v := range maxLengths {
+		totalLength = totalLength + v
+	}
+	res := strings.Repeat("-", totalLength) + "\n"
+
+	// Add column headers
+	header := "| "
+
+	// ID header
+	s := "ID"
+	if len(s) < maxLengths["Id"] {
+		s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+	}
+	header = header + s + " | "
+
+	// File name header
+	s = "File name"
+	if len(s) < maxLengths["File name"] {
+		s = s + strings.Repeat(" ", maxLengths["File name"]-len(s))
+	}
+	header = header + s + " | "
+
+	// File size header
+	s = "File size"
+	if len(s) < maxLengths["File size"] {
+		s = s + strings.Repeat(" ", maxLengths["File size"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Num of blocks header
+	s = "Num of blocks"
+	if len(s) < maxLengths["Num of blocks"] {
+		s = s + strings.Repeat(" ", maxLengths["Num of blocks"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Counter header
+	s = "Counter"
+	if len(s) < maxLengths["Counter"] {
+		s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
+	}
+	header = header + s + " |"
+
+	res = res + header + "\n"
+	res = res + strings.Repeat("-", totalLength) + "\n"
+
+	for _, i := range metaList {
+		info := fileMap[i.Id]
+		line := "| "
+
+		// Id
+		s := fmt.Sprintf("%d", i.Id)
+		if len(s) < maxLengths["Id"] {
+			s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+		}
+		line = line + s + " | "
+
+		// File name
+		s = i.Filename
+		if len(s) < maxLengths["File name"] {
+			s = s + strings.Repeat(" ", maxLengths["File name"]-len(s))
+		}
+		line = line + s + " | "
+
+		// File size
+		s = fmt.Sprintf("%f MiB", float64(info.FileSize) / BLOCK_SIZE)
+		if len(s) < maxLengths["File size"] {
+			s = s + strings.Repeat(" ", maxLengths["File size"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Num of blocks
+		s = fmt.Sprintf("%d", info.FileBlocks)
+		if len(s) < maxLengths["Num of blocks"] {
+			s = s + strings.Repeat(" ", maxLengths["Num of blocks"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Counter
+		s = fmt.Sprintf("%d", info.Counter)
+		if len(s) < maxLengths["Counter"] {
+			s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
+		}
+		line = line + s + " |"
+		res = res + line + "\n"
+	}
+	res = res + strings.Repeat("-", totalLength) + "\n"
+	return res
+} 
