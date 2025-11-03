@@ -11,7 +11,8 @@ import (
 	"sync"
 )
 
-const BLOCK_SIZE = 1024 * 1024 * 2 // 2 MiB
+const MiB = 1024 * 1024
+const BLOCK_SIZE = 2 * MiB
 
 type Meta struct {
 	Id         uint64   // File ID
@@ -308,7 +309,7 @@ func CreateTable(fileMap map[uint64]Meta) string {
 		lengths := map[string]int{
 			"Id":            len(fmt.Sprintf("%d", i.Id)),
 			"File name":     len(i.Filename),
-			"File size":     len(fmt.Sprintf("%f MiB", float64(info.FileSize) / BLOCK_SIZE)),
+			"File size":     len(fmt.Sprintf("%f MiB", float64(info.FileSize) / MiB)),
 			"Num of blocks": len(fmt.Sprintf("%d", info.FileBlocks)),
 			"Counter":       len(fmt.Sprintf("%d", info.Counter)),
 		}
