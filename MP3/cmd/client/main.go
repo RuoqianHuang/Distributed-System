@@ -1,15 +1,15 @@
 package main
 
 import (
-	"net"
-	"net/rpc"
 	"fmt"
 	"log"
-	"time"
-	"strconv"
+	"net"
+	"net/rpc"
 	"os"
+	"path/filepath"
+	"strconv"
+	"time"
 )
-
 
 const (
 	CONNECTION_TIMEOUT = 1 * time.Second
@@ -17,7 +17,9 @@ const (
 )
 
 type Args struct {
-	Command string
+	Command    string
+	Filename   string
+	FileSource string
 }
 
 func CallWithTimeout(
@@ -39,25 +41,20 @@ func CallWithTimeout(
 	go func() {
 		callChan <- client.Call("Server.CLI", args, result)
 	}()
-	select {
-	case err := <-callChan:
-		if err != nil {
-			log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
-		}
-	case <-time.After(CALL_TIMEOUT):
-		log.Printf("RPC call to server %s:%d timed out\n", hostname, port)
+	err = <-callChan
+	if err != nil {
+		log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
 	}
 }
 
-
 func main() {
-	if len(os.Args) < 3 {
-		log.Println("Usage: ./client <Query> <Hostname> -p <Port>")
-		log.Println("Example: ./client list_mem fa25-cs425-b601.cs.illinois.edu")
-		log.Println("Available commands: list_mem, list_self, join, leave, display_suspects, display_protocol, switch(protocol, suspicion)")
+	if len(os.Args) < 2 {
+		log.Println("Usage: ./client <Query> -p <Port>")
+		log.Println("Example: ./client member files")
+		log.Println("Available commands: member, status, files, create, append, get")
 	}
-
-	port := 12345
+	// TODO: relative path -> abs path
+	port := 8788
 	hostname := "fa25-cs425-b601.cs.illinois.edu"
 
 	var otherArgs []string
@@ -78,14 +75,25 @@ func main() {
 		}
 	}
 
-	if len(otherArgs) < 2 {
-		log.Fatal("Please specify query and hostname")
+	if len(otherArgs) < 1 {
+		log.Fatal("Please specify query")
 	}
 	args := Args{
 		Command: "status",
 	}
 	args.Command = otherArgs[0]
-	hostname = otherArgs[1]
+
+	if args.Command == "create" || args.Command == "get" || args.Command == "append" {
+		if len(otherArgs) < 3 {
+			log.Fatal("Pleas specify file name and file source to create file")
+		}
+		args.Filename = otherArgs[1]
+		FileSource, err := filepath.Abs(otherArgs[2])
+		if err != nil {
+			log.Fatalf("Can't resolve file path: %s: %s", otherArgs[2], err.Error())
+		}
+		args.FileSource = FileSource
+	}
 
 	result := new(string)
 	CallWithTimeout(hostname, port, args, result)
