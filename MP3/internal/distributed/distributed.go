@@ -858,6 +858,76 @@ func (d *DistributedFiles) CollectMeta() map[uint64]files.Meta {
 	return result
 }
 
+func (d *DistributedFiles) ListReplicas(filename string) string {
+    fileId := files.GetIdFromFilename(filename)
+    replicas, err := d.Membership.GetReplicas(fileId, d.NumOfReplicas)
+    if err != nil {
+        return fmt.Sprintf("Error: %s", err.Error())
+    }
+    
+    result := fmt.Sprintf("FileID: %d\n", fileId)
+    result += "Replicas:\n"
+    for _, replica := range replicas {
+        result += fmt.Sprintf("  ID: %d, Hostname: %s, Port: %d\n", 
+            replica.Id, replica.Hostname, replica.Port)
+    }
+    return result
+}
+
+func (d *DistributedFiles) ListLocalFiles() string {
+    metas := d.FileManager.GetMetas()
+    result := fmt.Sprintf("Node ID: %d, Hostname: %s, Port: %d\n", 
+        d.failureDetector.Info.Id, d.Hostname, d.Port)
+    result += "Files stored locally:\n"
+    
+    for id, meta := range metas {
+        result += fmt.Sprintf("  FileID: %d, Filename: %s\n", id, meta.FileName)
+    }
+    if len(metas) == 0 {
+        result += "  (no files stored locally)\n"
+    }
+    return result
+}
+
+func (d *DistributedFiles) GetFromReplica(vmAddress, filename, localfile string) error {
+    // Parse VM address
+    parts := strings.Split(vmAddress, ":")
+    if len(parts) != 2 {
+        return fmt.Errorf("invalid VM address format")
+    }
+    hostname := parts[0]
+    port, err := strconv.Atoi(parts[1])
+    if err != nil {
+        return err
+    }
+    
+    fileId := files.GetIdFromFilename(filename)
+    
+    // Get metadata from specific replica
+    meta := new(files.Meta)
+    err = RemoteCall("FileManager.ReadMeta", hostname, port, fileId, meta)
+    if err != nil {
+        return fmt.Errorf("failed to get meta: %s", err.Error())
+    }
+    if meta.Counter == 0 {
+        return fmt.Errorf("file does not exist")
+    }
+    
+    // Get all blocks from this replica
+    data := make([]byte, 0, meta.FileSize)
+    for i := 0; i < meta.FileBlocks; i++ {
+        blockInfo, _ := meta.GetBlock(i)
+        blockPack := new(files.BlockPackage)
+        err = RemoteCall("FileManager.ReadBlock", hostname, port, blockInfo.Id, blockPack)
+        if err != nil {
+            return fmt.Errorf("failed to get block %d: %s", i, err.Error())
+        }
+        data = append(data, blockPack.Data...)
+    }
+    
+    return os.WriteFile(localfile, data, 0644)
+}
+
 type FileInfo struct {
 	FileMeta         files.Meta
 	FileMetaReplicas []member.Info
