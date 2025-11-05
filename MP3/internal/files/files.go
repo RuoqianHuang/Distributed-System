@@ -15,11 +15,11 @@ const MiB = 1024 * 1024
 const BLOCK_SIZE = 2 * MiB
 
 type Meta struct {
-	Id         uint64   // File ID
-	FileSize   uint64   // File size
-	FileName   string   // File name
-	FileBlocks int      // Number of blocks
-	Counter    uint64   // File version counter
+	Id         uint64 // File ID
+	FileSize   uint64 // File size
+	FileName   string // File name
+	FileBlocks int    // Number of blocks
+	Counter    uint64 // File version counter
 }
 
 func GetIdFromFilename(filename string) uint64 {
@@ -30,11 +30,11 @@ func GetIdFromFilename(filename string) uint64 {
 func CreateMeta(filename string, fileSize uint64) Meta {
 	hash := sha256.Sum256([]byte(filename))
 	return Meta{
-		Id: uint64(binary.BigEndian.Uint64(hash[:8])),
-		FileName: filename,
-		FileSize:  fileSize,
-		FileBlocks: int((fileSize - 1) / BLOCK_SIZE + 1), // Ceil(fileSize / BLOCK_SIZE)
-		Counter: 1, // Counter + 1 on created
+		Id:         uint64(binary.BigEndian.Uint64(hash[:8])),
+		FileName:   filename,
+		FileSize:   fileSize,
+		FileBlocks: int((fileSize-1)/BLOCK_SIZE + 1), // Ceil(fileSize / BLOCK_SIZE)
+		Counter:    1,                                // Counter + 1 on created
 	}
 }
 
@@ -44,28 +44,28 @@ func (f *Meta) GetBlock(i int) (BlockInfo, error) {
 	}
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s%d", f.FileName, i)))
 	return BlockInfo{
-		Id: uint64(binary.BigEndian.Uint64(hash[:8])),
+		Id:          uint64(binary.BigEndian.Uint64(hash[:8])),
 		BlockNumber: i,
-		Counter: f.Counter,
-		FileName: f.FileName,
+		Counter:     f.Counter,
+		FileName:    f.FileName,
 	}, nil
 }
 
 type BlockInfo struct {
-	Id          uint64       // Block id
-	BlockNumber int          // Block number
-	Counter     uint64       // Block version counter
-	FileName    string       // File name
+	Id          uint64 // Block id
+	BlockNumber int    // Block number
+	Counter     uint64 // Block version counter
+	FileName    string // File name
 }
 
 type Block struct {
-	BlockInfo   BlockInfo    // Block Info
-	lock        sync.RWMutex // RW mutex for Counter and File read write
+	BlockInfo BlockInfo    // Block Info
+	lock      sync.RWMutex // RW mutex for Counter and File read write
 }
 
 type BlockPackage struct {
-	BlockInfo     BlockInfo  // Information about the requested block
-	Data          []byte     // Data of the block
+	BlockInfo BlockInfo // Information about the requested block
+	Data      []byte    // Data of the block
 }
 
 func (b *Block) Write(data []byte, Counter uint64) (uint64, error) {
@@ -74,7 +74,7 @@ func (b *Block) Write(data []byte, Counter uint64) (uint64, error) {
 	if b.BlockInfo.Counter >= Counter {
 		return b.BlockInfo.Counter, nil // Ignore write of older version
 	}
-	filename := fmt.Sprintf("%s-%d.block", b.BlockInfo.FileName, b.BlockInfo.Id)
+	filename := fmt.Sprintf("%d.block", b.BlockInfo.Id)
 	err := os.WriteFile(filename, data, 0644) // Update file
 	if err != nil {
 		return b.BlockInfo.Counter, err
@@ -91,24 +91,24 @@ func (b *Block) Remove() error {
 }
 
 func (b *Block) UpdateCounter(Counter uint64) uint64 {
-	// Update only the counter 
+	// Update only the counter
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	if b.BlockInfo.Counter >= Counter {
 		return b.BlockInfo.Counter // Ignore older version
 	}
-	b.BlockInfo.Counter = Counter 
+	b.BlockInfo.Counter = Counter
 	return b.BlockInfo.Counter
 }
 
 func (b *Block) Read() (BlockPackage, error) {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
-	filename := fmt.Sprintf("%s-%d.block", b.BlockInfo.FileName, b.BlockInfo.Id)
+	filename := fmt.Sprintf("%d.block", b.BlockInfo.Id)
 	res, err := os.ReadFile(filename) // Read file
 	return BlockPackage{
 		BlockInfo: b.BlockInfo,
-		Data: res,
+		Data:      res,
 	}, err
 }
 
@@ -125,14 +125,14 @@ func (b *Block) GetInfo() BlockInfo {
 }
 
 type FileManager struct {
-	localBlocks     map[uint64]*Block    // Local file blocks
-	localFileMeta   map[uint64]Meta      // Local file metadata
-	lock            sync.RWMutex         // RW mutex
+	localBlocks   map[uint64]*Block // Local file blocks
+	localFileMeta map[uint64]Meta   // Local file metadata
+	lock          sync.RWMutex      // RW mutex
 }
 
 func NewFileManager() *FileManager {
 	return &FileManager{
-		localBlocks: make(map[uint64]*Block),
+		localBlocks:   make(map[uint64]*Block),
 		localFileMeta: make(map[uint64]Meta),
 	}
 }
@@ -147,7 +147,7 @@ func (f *FileManager) GetBlocks() map[uint64]BlockInfo {
 	defer f.lock.RUnlock()
 	ret := make(map[uint64]BlockInfo, len(f.localBlocks))
 	for id, block := range f.localBlocks {
-		// Copy the data from the internal map 
+		// Copy the data from the internal map
 		ret[id] = block.GetInfo()
 	}
 	return ret
@@ -168,7 +168,7 @@ func (f *FileManager) GetMetas() map[uint64]Meta {
 	defer f.lock.RUnlock()
 	ret := make(map[uint64]Meta, len(f.localFileMeta))
 	for id, file := range f.localFileMeta {
-		// Copy the data from the internal map 
+		// Copy the data from the internal map
 		ret[id] = file
 	}
 	return ret
@@ -199,7 +199,7 @@ func (f *FileManager) ReadBlockInfo(id uint64, reply *BlockInfo) error {
 		*reply = block.GetInfo()
 	} else {
 		*reply = BlockInfo{ // Return an empty block with counter = 0
-			Id: id,
+			Id:      id,
 			Counter: 0,
 		}
 	}
@@ -208,15 +208,15 @@ func (f *FileManager) ReadBlockInfo(id uint64, reply *BlockInfo) error {
 
 func (f *FileManager) WriteBlock(args BlockPackage, reply *uint64) error {
 	f.lock.Lock()
-	// Update local info 
+	// Update local info
 	block, ok := f.localBlocks[args.BlockInfo.Id]
 	if !ok {
 		block = &Block{ // Insert new empty block
 			BlockInfo: BlockInfo{
-				Id: args.BlockInfo.Id,
+				Id:          args.BlockInfo.Id,
 				BlockNumber: args.BlockInfo.BlockNumber,
-				Counter: 0,
-				FileName: args.BlockInfo.FileName,
+				Counter:     0,
+				FileName:    args.BlockInfo.FileName,
 			},
 		}
 		f.localBlocks[args.BlockInfo.Id] = block
@@ -237,7 +237,7 @@ func (f *FileManager) ReadBlock(id uint64, reply *BlockPackage) error {
 		// Block does not exist, return empty block with counter = 0
 		*reply = BlockPackage{
 			BlockInfo: BlockInfo{
-				Id: id,
+				Id:      id,
 				Counter: 0,
 			},
 		}
@@ -268,15 +268,14 @@ func (f *FileManager) ReadMeta(id uint64, reply *Meta) error {
 	meta, ok := f.localFileMeta[id]
 	if !ok {
 		*reply = Meta{ // Return a empty meta with counter = 0
-			Id: id,
+			Id:      id,
 			Counter: 0,
 		}
 		return nil
-	} 
+	}
 	*reply = meta
 	return nil
 }
-
 
 func CreateTable(fileMap map[uint64]Meta) string {
 	type Pair struct {
@@ -298,18 +297,18 @@ func CreateTable(fileMap map[uint64]Meta) string {
 	// | ID    | File name | File size | Num of blocks | Counter |
 	// -----------------------------------------------------------
 	maxLengths := map[string]int{
-		"Id":             2,
-		"File name":      9,
-		"File size":      9,
-		"Num of blocks":  13,
-		"Counter":        7,
+		"Id":            2,
+		"File name":     9,
+		"File size":     9,
+		"Num of blocks": 13,
+		"Counter":       7,
 	}
 	for _, i := range metaList {
 		info := fileMap[i.Id]
 		lengths := map[string]int{
 			"Id":            len(fmt.Sprintf("%d", i.Id)),
 			"File name":     len(i.Filename),
-			"File size":     len(fmt.Sprintf("%f MiB", float64(info.FileSize) / MiB)),
+			"File size":     len(fmt.Sprintf("%f MiB", float64(info.FileSize)/MiB)),
 			"Num of blocks": len(fmt.Sprintf("%d", info.FileBlocks)),
 			"Counter":       len(fmt.Sprintf("%d", info.Counter)),
 		}
@@ -385,7 +384,7 @@ func CreateTable(fileMap map[uint64]Meta) string {
 		line = line + s + " | "
 
 		// File size
-		s = fmt.Sprintf("%f MiB", float64(info.FileSize) / BLOCK_SIZE)
+		s = fmt.Sprintf("%f MiB", float64(info.FileSize)/MiB)
 		if len(s) < maxLengths["File size"] {
 			s = s + strings.Repeat(" ", maxLengths["File size"]-len(s))
 		}
@@ -408,4 +407,4 @@ func CreateTable(fileMap map[uint64]Meta) string {
 	}
 	res = res + strings.Repeat("-", totalLength) + "\n"
 	return res
-} 
+}
