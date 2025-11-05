@@ -67,25 +67,6 @@ func (s *Server) CLI(args Args, reply *string) error {
 		} else {
 			*reply = fmt.Sprintf("%s append successfully!", args.Filename)
 		}
-	case "ls":
-		*reply = s.distributed.ListReplicas(args.Filename)
-	case "liststore":
-		*reply = s.distributed.ListLocalFiles()
-	case "getfromreplica":
-		parts := strings.Split(args.Command, " ")
-		if len(parts) < 4 {
-			*reply = "Usage: getfromreplica VMaddress HyDFSfilename localfilename"
-			break
-		}
-		vmAddress := parts[1]  
-		filename := parts[2]
-		localfile := parts[3]
-		err := s.distributed.GetFromReplica(vmAddress, filename, localfile)
-		if err != nil {
-			*reply = fmt.Sprintf("Failed: %s", err.Error())
-		} else {
-			*reply = fmt.Sprintf("File downloaded from %s to %s", vmAddress, localfile)
-		}
 	default:
 		*reply = "Unknown command."
 	}
