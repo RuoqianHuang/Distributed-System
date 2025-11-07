@@ -858,6 +858,22 @@ func (d *DistributedFiles) CollectMeta() map[uint64]files.Meta {
 	return result
 }
 
+func (d *DistributedFiles) ListReplicas(filename string) string {
+    fileId := files.GetIdFromFilename(filename)
+    replicas, err := d.Membership.GetReplicas(fileId, d.NumOfReplicas)
+    if err != nil {
+        return fmt.Sprintf("Error: %s", err.Error())
+    }
+    
+    result := fmt.Sprintf("FileID: %d\n", fileId)
+    result += "Replicas:\n"
+    for _, replica := range replicas {
+        result += fmt.Sprintf("  ID: %d, Hostname: %s, Port: %d\n", 
+            replica.Id, replica.Hostname, replica.Port)
+    }
+    return result
+}
+
 type FileInfo struct {
 	FileMeta         files.Meta
 	FileMetaReplicas []member.Info

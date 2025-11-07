@@ -35,6 +35,8 @@ type Args struct {
 
 func (s *Server) CLI(args Args, reply *string) error {
 	switch args.Command {
+	case "ls":
+		*reply = s.distributed.ListReplicas(args.Filename)
 	case "member":
 		infoMap := s.failureDetector.Membership.GetInfoMap()
 		*reply = "\n" + member.CreateTable(infoMap)
