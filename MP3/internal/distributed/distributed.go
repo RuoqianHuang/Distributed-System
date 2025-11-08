@@ -860,18 +860,119 @@ func (d *DistributedFiles) CollectMeta() map[uint64]files.Meta {
 
 func (d *DistributedFiles) ListReplicas(filename string) string {
     fileId := files.GetIdFromFilename(filename)
-    replicas, err := d.Membership.GetReplicas(fileId, d.NumOfReplicas)
-    if err != nil {
-        return fmt.Sprintf("Error: %s", err.Error())
-    }
     
     result := fmt.Sprintf("FileID: %d\n", fileId)
     result += "Replicas:\n"
-    for _, replica := range replicas {
-        result += fmt.Sprintf("  ID: %d, Hostname: %s, Port: %d\n", 
-            replica.Id, replica.Hostname, replica.Port)
+    
+    // Get theoretical replicas from the ring using GetReplicas
+    replicas, err := d.Membership.GetReplicas(fileId, d.NumOfReplicas)
+    if err != nil {
+        result += fmt.Sprintf("  Error getting replicas: %s\n", err.Error())
+        return result
     }
+    
+    foundAny := false
+    for _, replica := range replicas {
+        var meta files.Meta
+        exists := false
+        
+        if replica.Hostname == d.Hostname && replica.Port == d.Port {
+            // Check local storage
+            err := d.FileManager.ReadMeta(fileId, &meta)
+            if err == nil && meta.Counter > 0 {
+                exists = true
+            }
+        } else {
+            // Check remote storage
+            err := RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port+1, fileId, &meta)
+            if err == nil && meta.Counter > 0 {
+                exists = true
+            }
+        }
+        
+        // Include this replica if file exists here
+        if exists {
+            foundAny = true
+            vmAddress := fmt.Sprintf("%s:%d", replica.Hostname, replica.Port)
+            result += fmt.Sprintf("  ID: %d, VM Address: %s\n", replica.Id, vmAddress)
+        }
+    }
+    
+    if !foundAny {
+        result += "  (file not found on any replica)\n"
+    }
+    
     return result
+}
+
+func (d *DistributedFiles) GetFromReplica(vmAddress, filename, localfile string) error {
+	hostname := vmAddress
+	rpcPort := 8788
+	
+	fileId := files.GetIdFromFilename(filename)
+	
+	// Get metadata from specific replica
+	meta := new(files.Meta)
+	err := RemoteCall("FileManager.ReadMeta", hostname, rpcPort, fileId, meta)
+	if err != nil {
+		return fmt.Errorf("failed to get meta from %s: %s", vmAddress, err.Error())
+	}
+	if meta.Counter == 0 {
+		return fmt.Errorf("file does not exist on %s", vmAddress)
+	}
+
+	// Get all blocks from this replica
+	blocks := make([]files.BlockPackage, meta.FileBlocks)
+	tries := make([]int, meta.FileBlocks)
+	success := make([]int, meta.FileBlocks)
+	for t := 0; t < d.NumOfTries; t++ {
+		for i := 0; i < meta.FileBlocks; i++ {
+			if success[i] > 0 {
+				continue
+			}
+			blockInfo, err := meta.GetBlock(i)
+			if err != nil {
+				return fmt.Errorf("failed to get block info for block %d: %s", i, err.Error())
+			}
+			
+			blockPack := new(files.BlockPackage)
+			if hostname == d.Hostname {
+				err = d.FileManager.ReadBlock(blockInfo.Id, blockPack)
+			} else {
+				err = RemoteCall("FileManager.ReadBlock", hostname, rpcPort, blockInfo.Id, blockPack)
+			}
+			if err != nil {
+				tries[i]++
+				if tries[i] >= d.NumOfTries {
+					return fmt.Errorf("failed to read block %d for %d times: %s", i, tries[i], err.Error())
+				}
+				continue
+			}
+			if blockPack.BlockInfo.Counter == 0 {
+				tries[i]++
+				if tries[i] >= d.NumOfTries {
+					return fmt.Errorf("failed to read block %d for %d times: block does not exist on %s", i, tries[i], vmAddress)
+				}
+				continue
+			}
+			success[i] = 1
+			blocks[i] = *blockPack
+		}
+	}
+	
+	// Merge blocks
+	data := make([]byte, 0, meta.FileSize)
+	for i := 0; i < meta.FileBlocks; i++ {
+		data = append(data, blocks[i].Data...)
+	}
+	
+	// Write file to local filesystem
+	err = os.WriteFile(localfile, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write file to %s: %s", localfile, err.Error())
+	}
+	
+	return nil
 }
 
 type FileInfo struct {
@@ -882,3 +983,4 @@ type FileInfo struct {
 func (d *DistributedFiles) GetFileInfo() {
 	// TODO: list file info
 }
+

@@ -31,6 +31,7 @@ type Args struct {
 	Command    string
 	Filename   string
 	FileSource string
+	VMAddress  string
 }
 
 func (s *Server) CLI(args Args, reply *string) error {
@@ -68,6 +69,13 @@ func (s *Server) CLI(args Args, reply *string) error {
 			*reply = fmt.Sprintf("Failed to appedn %s: %s", args.Filename, err.Error())
 		} else {
 			*reply = fmt.Sprintf("%s append successfully!", args.Filename)
+		}
+	case "getfromreplica":
+		err := s.distributed.GetFromReplica(args.VMAddress, args.Filename, args.FileSource)
+		if err != nil {
+			*reply = fmt.Sprintf("Failed: %s", err.Error())
+		} else {
+			*reply = fmt.Sprintf("File downloaded from %s to %s", args.VMAddress, args.FileSource)
 		}
 	default:
 		*reply = "Unknown command."
@@ -171,6 +179,7 @@ func main() {
 		State:     member.Alive,
 	}
 	myId := member.HashInfo(myInfo)
+	myInfo.Id = myId // Set the Id field to match the computed hash
 	log.Printf("[Main] Starting, ID: %d, Hostname: %s, Port: %d", myId, myInfo.Hostname, myInfo.Port)
 
 	// create membership object

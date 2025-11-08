@@ -252,10 +252,12 @@ func (m *Membership) GetReplicas(id uint64, numReplica int) ([]Info, error) {
 	if id > m.SortedMembers[n - 1] {
 		ret := make([]Info, 0, numReplica)
 		for i := 0; i < numReplica; i++ {
-			info, ok := m.InfoMap[m.SortedMembers[i]]
+			memberId := m.SortedMembers[i]
+			info, ok := m.InfoMap[memberId]
 			if !ok {
 				return []Info{}, fmt.Errorf("inconsistent membership")
 			}
+			info.Id = memberId // Set the Id field to match the map key
 			ret = append(ret, info)
 		}
 		return ret, nil
@@ -269,10 +271,12 @@ func (m *Membership) GetReplicas(id uint64, numReplica int) ([]Info, error) {
 	ret := make([]Info, 0, numReplica)
 	for j := 0; j < numReplica; j++ {
 		idx := (i + j) % n
-		info, ok := m.InfoMap[m.SortedMembers[idx]]
+		memberId := m.SortedMembers[idx]
+		info, ok := m.InfoMap[memberId]
 		if !ok {
 			return []Info{}, fmt.Errorf("inconsistent membership")
 		}
+		info.Id = memberId // Set the Id field to match the map key
 		ret = append(ret, info)
 	}
 	return ret, nil

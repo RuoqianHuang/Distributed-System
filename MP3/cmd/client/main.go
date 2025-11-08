@@ -20,6 +20,7 @@ type Args struct {
 	Command    string
 	Filename   string
 	FileSource string
+	VMAddress  string
 }
 
 func CallWithTimeout(
@@ -91,6 +92,24 @@ func main() {
 		FileSource, err := filepath.Abs(otherArgs[2])
 		if err != nil {
 			log.Fatalf("Can't resolve file path: %s: %s", otherArgs[2], err.Error())
+		}
+		args.FileSource = FileSource
+	} 
+	if args.Command == "ls" {
+		if len(otherArgs) < 2 {
+			log.Fatal("Please specify file name for ls command")
+		}
+		args.Filename = otherArgs[1]
+	}
+	if args.Command == "getfromreplica" {
+		if len(otherArgs) < 4 {
+			log.Fatal("Usage: getfromreplica VMaddress HyDFSfilename localfilename")
+		}
+		args.VMAddress = otherArgs[1]
+		args.Filename = otherArgs[2]
+		FileSource, err := filepath.Abs(otherArgs[3])
+		if err != nil {
+			log.Fatalf("Can't resolve file path: %s: %s", otherArgs[3], err.Error())
 		}
 		args.FileSource = FileSource
 	}
