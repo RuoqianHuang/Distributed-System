@@ -29,11 +29,15 @@ func GetIdFromFilename(filename string) uint64 {
 
 func CreateMeta(filename string, fileSize uint64) Meta {
 	hash := sha256.Sum256([]byte(filename))
+	FileBlocks := 1
+	if fileSize > 0 {
+		FileBlocks = int((fileSize-1)/BLOCK_SIZE + 1) // Ceil(fileSize / BLOCK_SIZE)
+	}
 	return Meta{
 		Id:         uint64(binary.BigEndian.Uint64(hash[:8])),
 		FileName:   filename,
 		FileSize:   fileSize,
-		FileBlocks: int((fileSize-1)/BLOCK_SIZE + 1), // Ceil(fileSize / BLOCK_SIZE)
+		FileBlocks: FileBlocks,
 		Counter:    1,                                // Counter + 1 on created
 	}
 }
@@ -277,7 +281,8 @@ func (f *FileManager) ReadMeta(id uint64, reply *Meta) error {
 	return nil
 }
 
-func CreateTable(fileMap map[uint64]Meta) string {
+func CreateTable(fileMap map[uint64]Meta) (string, []uint64) {
+	// Return table string and sorted Id
 	type Pair struct {
 		Id       uint64
 		Filename string
@@ -292,6 +297,10 @@ func CreateTable(fileMap map[uint64]Meta) string {
 	sort.Slice(metaList, func(i, j int) bool {
 		return metaList[i].Filename < metaList[j].Filename
 	})
+	sortedId := make([]uint64, 0, len(metaList))
+	for _, pair := range metaList {
+		sortedId = append(sortedId, pair.Id)
+	}
 	// -----------------------------------------------------------
 	// | ID    | File name | File size | Num of blocks | Counter |
 	// | ID    | File name | File size | Num of blocks | Counter |
@@ -406,5 +415,126 @@ func CreateTable(fileMap map[uint64]Meta) string {
 		res = res + line + "\n"
 	}
 	res = res + strings.Repeat("-", totalLength) + "\n"
-	return res
+	return res, sortedId
+}
+
+func CreateBlockTable(blockMap map[uint64]BlockInfo) (string, []uint64) {
+	// Return table string and sorted Id
+	type Pair struct {
+		Id          uint64
+		BlockNumber int
+	}
+	metaList := make([]Pair, 0, 16)
+	for id, meta := range blockMap {
+		metaList = append(metaList, Pair{
+			Id:       id,
+			BlockNumber: meta.BlockNumber,
+		})
+	}
+	sort.Slice(metaList, func(i, j int) bool {
+		return metaList[i].BlockNumber < metaList[j].BlockNumber
+	})
+	sortedId := make([]uint64, 0, len(metaList))
+	for _, pair := range metaList {
+		sortedId = append(sortedId, pair.Id)
+	}
+	// ----------------------------------------------
+	// | ID    | File name | Block Number | Counter |
+	// | ID    | File name | Block Number | Counter |
+	// ----------------------------------------------
+	maxLengths := map[string]int{
+		"Id":            2,
+		"File name":     9,
+		"Block number":  12,
+		"Counter":       7,
+	}
+	for _, i := range metaList {
+		info := blockMap[i.Id]
+		lengths := map[string]int{
+			"Id":            len(fmt.Sprintf("%d", i.Id)),
+			"File name":     len(info.FileName),
+			"Block number":  len(fmt.Sprintf("%d", info.BlockNumber)),
+			"Counter":       len(fmt.Sprintf("%d", info.Counter)),
+		}
+		for key, value := range lengths {
+			if maxLengths[key] < value {
+				maxLengths[key] = value
+			}
+		}
+	}
+	totalLength := 13
+	for _, v := range maxLengths {
+		totalLength = totalLength + v
+	}
+	res := strings.Repeat("-", totalLength) + "\n"
+
+	// Add column headers
+	header := "| "
+
+	// ID header
+	s := "ID"
+	if len(s) < maxLengths["Id"] {
+		s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+	}
+	header = header + s + " | "
+
+	// File name header
+	s = "File name"
+	if len(s) < maxLengths["File name"] {
+		s = s + strings.Repeat(" ", maxLengths["File name"]-len(s))
+	}
+	header = header + s + " | "
+
+	s = "Block number"
+	if len(s) < maxLengths["Block number"] {
+		s = s + strings.Repeat(" ", maxLengths["Block number"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Counter header
+	s = "Counter"
+	if len(s) < maxLengths["Counter"] {
+		s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
+	}
+	header = header + s + " |"
+
+	res = res + header + "\n"
+	res = res + strings.Repeat("-", totalLength) + "\n"
+
+	for _, i := range metaList {
+		info := blockMap[i.Id]
+		line := "| "
+
+		// Id
+		s := fmt.Sprintf("%d", i.Id)
+		if len(s) < maxLengths["Id"] {
+			s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+		}
+		line = line + s + " | "
+
+		// File name
+		s = info.FileName
+		if len(s) < maxLengths["File name"] {
+			s = s + strings.Repeat(" ", maxLengths["File name"]-len(s))
+		}
+		line = line + s + " | "
+
+
+		// Block number
+		s = fmt.Sprintf("%d", info.BlockNumber)
+		if len(s) < maxLengths["Block number"] {
+			s = s + strings.Repeat(" ", maxLengths["Block number"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Counter
+		s = fmt.Sprintf("%d", info.Counter)
+		if len(s) < maxLengths["Counter"] {
+			s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
+		}
+		line = line + s + " |"
+		res = res + line + "\n"
+	}
+	res = res + strings.Repeat("-", totalLength) + "\n"
+	return res, sortedId
 }

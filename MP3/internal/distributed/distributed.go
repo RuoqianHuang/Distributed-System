@@ -682,6 +682,9 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	if err != nil {
 		return fmt.Errorf("failed to read file source: %s", err.Error())
 	}
+	if len(data) == 0 {
+		return fmt.Errorf("nothing to append to %s", filename)
+	}
 	log.Printf("[DF] Append: read data from local source file %s", fileSource)
 
 	// Lock the meta, so that no other process can write to this file
