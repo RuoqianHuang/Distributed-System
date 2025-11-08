@@ -300,7 +300,7 @@ func RandomPermutation(arr *[]uint64) {
 	}
 }
 
-func CreateTable(infoMap map[uint64]Info) string {
+func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 	type Pair struct {
 		Id       uint64
 		Hostname string
@@ -320,6 +320,10 @@ func CreateTable(infoMap map[uint64]Info) string {
 		}
 		return infoList[i].Port < infoList[j].Port
 	})
+	sortedId := make([]uint64, 0, len(infoList))
+	for _, pair := range infoList {
+		sortedId = append(sortedId, pair.Id)
+	}
 	// --------------------------------------------------------------------
 	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
 	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
@@ -468,5 +472,5 @@ func CreateTable(infoMap map[uint64]Info) string {
 		res = res + line + "\n"
 	}
 	res = res + strings.Repeat("-", totalLength) + "\n"
-	return res
+	return res, sortedId
 }
