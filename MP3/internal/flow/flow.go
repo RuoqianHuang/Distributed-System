@@ -2,6 +2,7 @@ package flow
 
 import (
 	"container/list"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type Msg struct {
 type FlowCounter struct {
 	currentCounter int64
 	que list.List
+	lock sync.RWMutex
 }
 
 func (f *FlowCounter) maintain() {
@@ -26,6 +28,8 @@ func (f *FlowCounter) maintain() {
 }
 
 func (f *FlowCounter) Add(size int64) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
 	f.currentCounter += size
 	f.que.PushBack(Msg{
 		Size: size,
@@ -35,6 +39,8 @@ func (f *FlowCounter) Add(size int64) {
 }
 
 func (f *FlowCounter) Get() float64 {
+	f.lock.Lock()
+	defer f.lock.Unlock()
 	f.maintain()
 	return float64(f.currentCounter) / COUNTER_DURATION.Seconds()
 }
