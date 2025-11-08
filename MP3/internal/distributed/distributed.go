@@ -2,6 +2,7 @@ package distributed
 
 import (
 	"cs425/mp3/internal/files"
+	"cs425/mp3/internal/flow"
 	"cs425/mp3/internal/member"
 	"cs425/mp3/internal/queue"
 	"fmt"
@@ -23,27 +24,52 @@ type BufferedBlock struct {
 	TempFileName string
 }
 
+type State int
+
+const (
+	Alive State = iota
+	Stop  
+)
+
 type DistributedFiles struct {
 	Tround               time.Duration
 	Hostname             string
 	Port                 int
+	
 	FileManager          *files.FileManager
 	Membership           *member.Membership
+
 	NumOfReplicas        int
 	NumOfMetaWorkers     int
 	NumOfBlockWorkers    int
 	NumOfBufferedWorkers int
 	NumOfTries           int                      // Number of tries uploading blocks
-	MetaJobs             *queue.Queue             // Merge job queue for metadata
+	
+	// Job to merge blocks
 	BlockJobs            *queue.Queue             // Merge job queue for blocks
+	BlockJobMap          map[uint64]bool          // Map to check if it's in queue
+	lockBlockJobMap      sync.RWMutex             // lock for BlockJobMap
+
+	// Job to merge meta
+	MetaJobs             *queue.Queue             // Merge job queue for metadata
+	MetaJobMap           map[uint64]bool          // Map to check if it's in queue
+	lockMetaJobMap       sync.RWMutex             // lock for MetaJobMap
+
+	// Job to commit buffered blocks
 	BufferedBlocks       *queue.Queue             // Buffered block queue
 	lockBufferedBlocks   sync.RWMutex             // Lock for buffered blocks
 	BufferedBlockMap     map[uint64]BufferedBlock // Buffered blocks
+
+	// Lock for atomicity
 	LockedMeta           map[uint64]files.Meta    // Locked metadata (to ensure atomic operation)
 	locklockedMeta       sync.RWMutex             // Lock for locked metadata (to ensure atomic operation)
+
+	// Flow counter and State
+	OutFlow              *flow.FlowCounter
+	State                State
 }
 
-func RemoteCall(
+func (d *DistributedFiles) RemoteCall(
 	funcName string,
 	hostname string,
 	port int,
@@ -123,7 +149,7 @@ func (d *DistributedFiles) sendMeta(
 ) int {
 	// Call for the file version
 	result := new(files.Meta)
-	err := RemoteCall("FileManager.ReadMeta", hostname, port, meta.Id, result)
+	err := d.RemoteCall("FileManager.ReadMeta", hostname, port, meta.Id, result)
 	if err != nil {
 		log.Printf("[DF] Failed to get remote meta counter of %s: %s", meta.FileName, err.Error())
 		return 0
@@ -132,7 +158,7 @@ func (d *DistributedFiles) sendMeta(
 	if result.Counter < meta.Counter {
 		// Need update
 		_reply := new(uint64)
-		err = RemoteCall("FileManager.WriteMeta", hostname, port, meta, _reply)
+		err = d.RemoteCall("FileManager.WriteMeta", hostname, port, meta, _reply)
 		if err != nil {
 			log.Printf("[DF] Failed to write meta of %s: %s", meta.FileName, err.Error())
 			return 0
@@ -150,7 +176,7 @@ func (d *DistributedFiles) sendBlock(
 
 	// Call for the file version
 	result := new(files.BlockInfo)
-	err := RemoteCall("FileManager.ReadBlockInfo", hostname, port, blockInfo.Id, result)
+	err := d.RemoteCall("FileManager.ReadBlockInfo", hostname, port, blockInfo.Id, result)
 	if err != nil {
 		log.Printf("[DF] Failed to get remote block info of %s-%d: %s", blockInfo.FileName, blockInfo.BlockNumber, err.Error())
 		return 0
@@ -165,7 +191,7 @@ func (d *DistributedFiles) sendBlock(
 			return 0
 		}
 		reply := new(uint64)
-		err = RemoteCall("FileManager.WriteBlock", hostname, port, blockPack, reply)
+		err = d.RemoteCall("FileManager.WriteBlock", hostname, port, blockPack, reply)
 		if err != nil {
 			log.Printf("[DF] Failed to write block of %s-%d: %s", blockInfo.FileName, blockInfo.BlockNumber, err.Error())
 			return 0
@@ -178,9 +204,18 @@ func (d *DistributedFiles) workerLoopMeta(waitGroup *sync.WaitGroup) {
 	// Background job that distribute and balance the metadata
 	defer waitGroup.Done()
 	for {
+		if d.State == Stop {
+			break
+		}
+
 		// Get job from queue
 		val := d.MetaJobs.Pop() // Blocking call
 		id := val.(uint64)
+
+		// remove it from MetaMap
+		d.lockMetaJobMap.Lock()
+		delete(d.MetaJobMap, id)
+		d.lockMetaJobMap.Unlock()
 
 		// Get file meta from local file manager
 		result := new(files.Meta)
@@ -218,9 +253,18 @@ func (d *DistributedFiles) workerLoopBlock(waitGroup *sync.WaitGroup) {
 	// Background job that distribute and balance blocks
 	defer waitGroup.Done()
 	for {
+		if d.State == Stop {
+			break
+		}
+
 		// Get job from queue
 		val := d.BlockJobs.Pop() // Blocking call
 		id := val.(uint64)
+
+		// remove it from BlockMap
+		d.lockBlockJobMap.Lock()
+		delete(d.BlockJobMap, id)
+		d.lockBlockJobMap.Unlock()
 
 		// Get file meta from local file manager
 		block, err := d.FileManager.GetBlock(id)
@@ -280,7 +324,7 @@ func (d *DistributedFiles) getRemoteMeta(id uint64, quorum int) (files.Meta, err
 			}
 		} else {
 			result := new(files.Meta)
-			err = RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port+1, id, result) // using udp port + 1 as rpc port
+			err = d.RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port+1, id, result) // using udp port + 1 as rpc port
 			if err != nil {
 				continue
 			}
@@ -327,7 +371,7 @@ func (d *DistributedFiles) getRemoteBlock(id uint64, quorum int) (files.BlockPac
 			}
 		} else {
 			result := new(files.BlockPackage)
-			err = RemoteCall("FileManager.ReadBlock", replica.Hostname, replica.Port+1, id, result) // using udp port + 1 as rpc port
+			err = d.RemoteCall("FileManager.ReadBlock", replica.Hostname, replica.Port+1, id, result) // using udp port + 1 as rpc port
 			if err != nil {
 				continue
 			}
@@ -350,6 +394,10 @@ func (d *DistributedFiles) getRemoteBlock(id uint64, quorum int) (files.BlockPac
 func (d *DistributedFiles) workerLoopBuffered(waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
 	for {
+		if d.State == Stop {
+			break
+		}
+
 		// Buffered block id from queue
 		val := d.BufferedBlocks.Pop() // Blocking call
 		id := val.(uint64)
@@ -489,7 +537,7 @@ func (d *DistributedFiles) sendBufferedBlocks(blockPack files.BlockPackage, quor
 			replyCounter++
 		} else {
 			result := new(uint64)
-			err = RemoteCall("DistributedFiles.ReceiveBufferedBlocks", replica.Hostname, replica.Port+1, blockPack, result)
+			err = d.RemoteCall("DistributedFiles.ReceiveBufferedBlocks", replica.Hostname, replica.Port+1, blockPack, result)
 			if err != nil {
 				log.Printf("[DF] Failed to sent buffered block to %s:%d: %s", replica.Hostname, replica.Port, err.Error())
 				continue
@@ -558,7 +606,7 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 	if err != nil {
 		return fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
-	err = RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+	err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
 	}
@@ -567,7 +615,7 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 	defer func() {
 		// Release lock
 		for i := 0; i < d.NumOfTries; i++ { // Try
-			err = RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
 			if err == nil {
 				log.Printf("[DF] lock for %s released", filename)
 				break
@@ -694,7 +742,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	if err != nil {
 		return fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
-	err = RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+	err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
 	if err != nil {
 		return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
 	}
@@ -702,7 +750,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	defer func() {
 		// Release lock
 		for i := 0; i < d.NumOfTries; i++ { // Try
-			err = RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
 			if err == nil {
 				log.Printf("[DF] lock for %s released", filename)
 				break
@@ -821,11 +869,27 @@ func (d *DistributedFiles) Merge(_ int, reply *int) error {
 	// Loop through local files and redistribute them
 	metas := d.FileManager.GetMetas()
 	for id := range metas {
-		d.MetaJobs.Push(id) // Add local meta to merge job
+		d.lockMetaJobMap.RLock()
+		_, ok := d.MetaJobMap[id]
+		d.lockMetaJobMap.RUnlock()
+		if !ok {
+			d.MetaJobs.Push(id) // Add local meta to merge job
+			d.lockMetaJobMap.Lock()
+			d.MetaJobMap[id] = true
+			d.lockMetaJobMap.Unlock()
+		}
 	}
 	blocks := d.FileManager.GetBlocks()
 	for id := range blocks {
-		d.BlockJobs.Push(id) // Add local block to merge job
+		d.lockBlockJobMap.RLock()
+		_, ok := d.BlockJobMap[id]
+		d.lockBlockJobMap.RUnlock()
+		if !ok {
+			d.BlockJobs.Push(id) // Add local block to merge job
+			d.lockBlockJobMap.Lock()
+			d.BlockJobMap[id] = true
+			d.lockBlockJobMap.Unlock()
+		}
 	}
 	return nil
 }
@@ -842,7 +906,7 @@ func (d *DistributedFiles) CollectMeta() map[uint64]files.Meta {
 	dummyArg := 0
 	for _, member := range members {
 		reply := new(map[uint64]files.Meta)
-		err := RemoteCall("DistributedFiles.GetMetas", member.Hostname, member.Port+1, dummyArg, reply)
+		err := d.RemoteCall("DistributedFiles.GetMetas", member.Hostname, member.Port+1, dummyArg, reply)
 		if err != nil {
 			log.Printf("[DF] Failed to get metas from %s:%d: %s", member.Hostname, member.Port, err.Error())
 			continue
@@ -887,7 +951,7 @@ func (d *DistributedFiles) ListReplicas(filename string) string {
             }
         } else {
             // Check remote storage
-            err := RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port+1, fileId, &meta)
+            err := d.RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port+1, fileId, &meta)
             if err == nil && meta.Counter > 0 {
                 exists = true
             }
@@ -916,7 +980,7 @@ func (d *DistributedFiles) GetFromReplica(vmAddress, filename, localfile string)
 	
 	// Get metadata from specific replica
 	meta := new(files.Meta)
-	err := RemoteCall("FileManager.ReadMeta", hostname, rpcPort, fileId, meta)
+	err := d.RemoteCall("FileManager.ReadMeta", hostname, rpcPort, fileId, meta)
 	if err != nil {
 		return fmt.Errorf("failed to get meta from %s: %s", vmAddress, err.Error())
 	}
@@ -942,7 +1006,7 @@ func (d *DistributedFiles) GetFromReplica(vmAddress, filename, localfile string)
 			if hostname == d.Hostname {
 				err = d.FileManager.ReadBlock(blockInfo.Id, blockPack)
 			} else {
-				err = RemoteCall("FileManager.ReadBlock", hostname, rpcPort, blockInfo.Id, blockPack)
+				err = d.RemoteCall("FileManager.ReadBlock", hostname, rpcPort, blockInfo.Id, blockPack)
 			}
 			if err != nil {
 				tries[i]++
@@ -987,3 +1051,6 @@ func (d *DistributedFiles) GetFileInfo() {
 	// TODO: list file info
 }
 
+func (d *DistributedFiles) Stop() {
+	d.State = Stop
+}

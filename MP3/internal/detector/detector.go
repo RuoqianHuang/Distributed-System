@@ -13,6 +13,13 @@ import (
 
 const ProbeTimeout time.Duration = 2 * time.Second
 
+type State int
+
+const (
+	Alive State = iota
+	Stop  
+)
+
 type FD struct {
 	Tround            time.Duration
 	Tsuspect          time.Duration
@@ -23,6 +30,7 @@ type FD struct {
 	Membership        *member.Membership
 	InFlow            *flow.FlowCounter    // input network counter
 	OutFlow           *flow.FlowCounter    // output network counter
+	State             State   
 }
 
 
@@ -158,6 +166,10 @@ func (f *FD) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 
 	data := make([]byte, 4096)
 	for {
+		if f.State == Stop {
+			break // Stop
+		}
+
 		size, _, err := conn.ReadFromUDP(data)
 		if err != nil {
 			log.Printf("[FD] UDP Read error: %s", err.Error())
@@ -200,9 +212,7 @@ func (f *FD) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 			default:
 				// Ignore all other messages
 			}
-
 		}
-
 	}
 }
 
@@ -215,6 +225,9 @@ func (f *FD) startFailureDetectorLoop(waitGroup *sync.WaitGroup) {
 
 	// The main event loop
 	for range ticker.C {
+		if f.State == Stop {
+			break
+		}
 
 		// Check if any leader in the info map
 		isolated := true
@@ -244,4 +257,23 @@ func (f *FD) Start() {
 	waitGroup.Add(1)
 	go f.startFailureDetectorLoop(waitGroup)
 	waitGroup.Wait()
+}
+
+func (f *FD) StopAndLeave() {
+	// Notify all members about voluntary leave
+	infoMap := f.Membership.GetInfoMap()
+	for id, info := range infoMap {
+		if info.State == member.Alive && id != f.Id {
+			leaveMessage := utils.Message{
+				Type:       utils.Leave,
+				SenderInfo: infoMap[id],
+				InfoMap:    make(map[uint64]member.Info), // Empty map
+			}
+			utils.SendMessage(leaveMessage, info.Hostname, info.Port)
+		}
+	}
+
+	// Update local state
+	f.State = Stop
+	log.Printf("Voluntarily left the group")
 }

@@ -105,6 +105,13 @@ func (s *Server) GetReplicas(Id uint64, reply *[]member.Info) error {
 	return nil
 }
 
+func (s *Server) Leave(_ int, reply *string) error {
+	s.failureDetector.StopAndLeave()
+	s.distributed.Stop()
+	*reply = fmt.Sprintf("%s:%d leave and stop", s.distributed.Hostname, s.distributed.Port)
+	return nil
+}
+
 func (s *Server) registerRPC() {
 	s.fileManager.RegisterRPC()
 	s.distributed.RegisterRPC()
@@ -156,8 +163,8 @@ func main() {
 	// some default parameters
 	udpPort := utils.DEFAULT_PORT
 	Tround := time.Second / 10
-	Tsuspect := Tround * 10
-	Tfail := Tround * 10
+	Tsuspect := Tround * 20
+	Tfail := Tround * 20
 	Tcleanup := Tround * 100 // don't cleanup too fast, I need this to record FP rate and other stuff
 
 	// parse command line arguments
@@ -235,7 +242,7 @@ func main() {
 
 	// create distributed file system
 	distributed := distributed.DistributedFiles{
-		Tround:               time.Second / 2,
+		Tround:               time.Second * 5, // run Merge every 5s
 		Hostname:             hostname,
 		Port:                 myInfo.Port,
 		FileManager:          fileManager,
@@ -245,7 +252,9 @@ func main() {
 		NumOfBlockWorkers:    2,
 		NumOfBufferedWorkers: 2,
 		NumOfTries:           3,
+		MetaJobMap:          make(map[uint64]bool),
 		MetaJobs:             queue.NewQueue(),
+		BlockJobMap:          make(map[uint64]bool),
 		BlockJobs:            queue.NewQueue(),
 		BufferedBlocks:       queue.NewQueue(),
 		BufferedBlockMap:     make(map[uint64]distributed.BufferedBlock),
