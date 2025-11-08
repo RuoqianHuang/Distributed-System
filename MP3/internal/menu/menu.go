@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+
 	"github.com/buger/goterm"
 	"github.com/pkg/term"
 )
@@ -35,15 +36,6 @@ var NavigationKeys = map[byte]bool{
 	KeyRight: true,
 }
 
-// MenuContext Mode
-type MenuContext int
-
-const (
-	MenuContextOptions MenuContext = iota // Focus on options
-	MenuContextTable                      // Focus on table
-)
-
-
 type Menu struct {
 	Prompt string
 
@@ -52,39 +44,36 @@ type Menu struct {
 	OptionCursor int
 
 	// Table (Vertical Menu)
-	SortedId     []uint64
-	TableLines   []string
-	TableCursor  int
+	SortedId    []uint64
+	TableLines  []string
+	TableCursor int
 
 	// State
-	ActiveContext MenuContext
-	SelectTable   bool
+	SelectTable bool
 
 	// Display partial rows
-	DisplayRows  int
-	StartingRow  int
+	DisplayRows int
+	StartingRow int
 }
 
-func NewMenu(prompt string, tableContent string, sortedId []uint64, options []string, selectTable bool) *Menu {	
+func NewMenu(prompt string, tableContent string, sortedId []uint64, options []string, selectTable bool) *Menu {
 	if len(sortedId) > 0 {
-		tablelines := strings.Split(tableContent, "\n") // Table 
+		tablelines := strings.Split(tableContent, "\n") // Table
 		if len(tablelines) > 0 && tablelines[len(tablelines)-1] == "" {
-            tablelines = tablelines[:len(tablelines)-1] 
-        }
-		return &Menu{
-			Prompt:        prompt,
-			Options:       options,                        // Options
-			SortedId: sortedId,
-			TableLines: tablelines,
-			ActiveContext: MenuContextOptions,             // Default on options
-			SelectTable: selectTable,
-			DisplayRows: min(len(tablelines) - 4, 10),
+			tablelines = tablelines[:len(tablelines)-1]
 		}
-	} 
+		return &Menu{
+			Prompt:      prompt,
+			Options:     options, // Options
+			SortedId:    sortedId,
+			TableLines:  tablelines,
+			SelectTable: selectTable,
+			DisplayRows: min(len(tablelines)-4, 10),
+		}
+	}
 	return &Menu{
-		Prompt:        prompt,
-		Options:       options,                        // Options
-		ActiveContext: MenuContextOptions,             // Default on options
+		Prompt:      prompt,
+		Options:     options, // Options
 		SelectTable: false,
 	}
 }
@@ -92,21 +81,20 @@ func NewMenu(prompt string, tableContent string, sortedId []uint64, options []st
 func (m *Menu) renderUI(redraw bool) {
 	// Render the whole UI; if redraw=true, move cursor to top
 
-    if redraw {
-        // Calculate total line count
+	if redraw {
+		// Calculate total line count
 		tableLines := 0
 		if m.TableLines != nil {
 			tableLines = m.DisplayRows + 4 // Row + header(3) + footer(1)
 		}
-        totalLines := tableLines + 2
-        
-        // Move the cursor to the top
-        fmt.Printf(CursorUpFormat, totalLines)
-    }
+		totalLines := tableLines + 2
+
+		// Move the cursor to the top
+		fmt.Printf(CursorUpFormat, totalLines)
+	}
 
 	// Print Prompt
 	fmt.Printf("%s\n", goterm.Color(goterm.Bold(m.Prompt)+":", goterm.CYAN))
-    
 
 	// Print Options
 	optionLine := ""
@@ -117,42 +105,36 @@ func (m *Menu) renderUI(redraw bool) {
 			optionLine += fmt.Sprintf("    %s    ", opt)
 		}
 	}
-	
-    fmt.Print(ClearLine) // Clear current line
-	if m.ActiveContext == MenuContextOptions {
-		fmt.Print(goterm.Background(optionLine, goterm.BLUE) + "\n")
-	} else {
-		fmt.Print(optionLine + "\n")
-	}
 
+	fmt.Print(ClearLine) // Clear current line
+	fmt.Print(optionLine + "\n")
 
 	if m.TableLines != nil {
 		// Render table
 		headerLines := 3
-		
+
 		// Calculate StartingRow
 		if m.TableCursor < m.StartingRow {
 			m.StartingRow = m.TableCursor
 		}
-		if m.TableCursor >= m.StartingRow + m.DisplayRows {
+		if m.TableCursor >= m.StartingRow+m.DisplayRows {
 			m.StartingRow = m.TableCursor - m.DisplayRows + 1
 		}
-		
 
-		dataLines := m.TableLines[headerLines + m.StartingRow : headerLines + m.StartingRow + m.DisplayRows]
+		dataLines := m.TableLines[headerLines+m.StartingRow : headerLines+m.StartingRow+m.DisplayRows]
 		numDataRows := len(dataLines)
-		
+
 		// Print the header
 		fmt.Print(ClearLine + m.TableLines[0] + "\n")
 		fmt.Print(ClearLine + m.TableLines[1] + "\n")
 		fmt.Print(ClearLine + m.TableLines[2] + "\n")
-		
+
 		// Print rows
 		termHeight := goterm.Height()
 		for i := 0; i < min(termHeight, numDataRows); i++ {
 			line := dataLines[i]
 			fmt.Print(ClearLine) // Clear current line
-			if i == m.TableCursor - m.StartingRow && m.ActiveContext == MenuContextTable {
+			if i == m.TableCursor-m.StartingRow && m.SelectTable {
 				fmt.Print(goterm.Color(line, goterm.YELLOW) + "\n") // Highlight current line
 			} else {
 				fmt.Print(line + "\n")
@@ -160,7 +142,7 @@ func (m *Menu) renderUI(redraw bool) {
 		}
 
 		// Print the footer
-		fmt.Print(ClearLine + m.TableLines[len(m.TableLines) - 1] + "\n")
+		fmt.Print(ClearLine + m.TableLines[len(m.TableLines)-1] + "\n")
 	}
 
 	goterm.Flush()
@@ -170,11 +152,11 @@ func (m *Menu) Display() (string, uint64, error) {
 	defer func() {
 		// restore cursor
 		fmt.Print(ShowCursor)
-		goterm.Clear() 
+		goterm.Clear()
 		goterm.MoveCursor(1, 1)
 		goterm.Flush()
 	}()
-	
+
 	// first render
 	m.renderUI(false)
 	fmt.Print(HideCursor)
@@ -190,39 +172,24 @@ func (m *Menu) Display() (string, uint64, error) {
 		switch keyCode {
 		case KeyEscape: // Exit
 			return "", 0, fmt.Errorf("exit")
-		
+
 		case KeyTab: // switch context
-			if m.ActiveContext == MenuContextOptions && m.SelectTable {
-				m.ActiveContext = MenuContextTable
-			} else {
-				m.ActiveContext = MenuContextOptions
-			}
+			m.OptionCursor = (m.OptionCursor + len(m.Options) - 1) % len(m.Options)
 
 		case KeyLeft:
-			if m.ActiveContext == MenuContextOptions {
-				m.OptionCursor = (m.OptionCursor + len(m.Options) - 1) % len(m.Options)
-			}
+			m.OptionCursor = (m.OptionCursor + len(m.Options) - 1) % len(m.Options)
 
 		case KeyRight:
-			if m.ActiveContext == MenuContextOptions {
-				m.OptionCursor = (m.OptionCursor + 1) % len(m.Options)
-			}
+			m.OptionCursor = (m.OptionCursor + 1) % len(m.Options)
 
 		case KeyUp:
-			if m.ActiveContext == MenuContextTable && numDataRows > 0 {
-				m.TableCursor = (m.TableCursor + numDataRows - 1) % numDataRows
-			}
+			m.TableCursor = (m.TableCursor + numDataRows - 1) % numDataRows
 
 		case KeyDown:
-			if m.ActiveContext == MenuContextTable && numDataRows > 0 {
-				m.TableCursor = (m.TableCursor + 1) % numDataRows
-			}
-		
+			m.TableCursor = (m.TableCursor + 1) % numDataRows
+
 		case KeyEnter: // selection
-			if m.ActiveContext == MenuContextOptions && m.SelectTable {
-				// If press enter on options, switch to table
-				m.ActiveContext = MenuContextTable
-			} else if m.ActiveContext == MenuContextTable && numDataRows > 0 {
+			if m.SelectTable {
 				// If press enter on table, return selected value
 				selectedOption := m.Options[m.OptionCursor]
 				selectedRowID := m.SortedId[m.TableCursor]
@@ -260,7 +227,7 @@ func getInput() byte {
 		return 0
 	}
 
-	defer t.Restore() 
+	defer t.Restore()
 
 	if read == 3 {
 		if _, ok := NavigationKeys[readBytes[2]]; ok {
