@@ -56,7 +56,7 @@ func main() {
 	}
 	// TODO: relative path -> abs path
 	port := 8788
-	hostname := "fa25-cs425-b601.cs.illinois.edu"
+	hostname := "localhost"
 
 	var otherArgs []string
 	for i := 1; i < len(os.Args); i++ {
