@@ -40,15 +40,18 @@ func (s *Server) CLI(args Args, reply *string) error {
 		*reply = s.distributed.ListReplicas(args.Filename)
 	case "member":
 		infoMap := s.failureDetector.Membership.GetInfoMap()
-		*reply = "\n" + member.CreateTable(infoMap)
+		table, _ := member.CreateTable(infoMap)
+		*reply = "\n" + table
 	case "status":
 		infoMap := s.failureDetector.Membership.GetInfoMap()
+		table, _ := member.CreateTable(infoMap)
 		*reply = fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Input: %f bytes/s, Output: %f bytes/s\n",
-			s.failureDetector.Info.Id, s.failureDetector.Info.Hostname, s.failureDetector.Info.Port, s.InFlow.Get(), s.OutFlow.Get()) + member.CreateTable(infoMap)
+			s.failureDetector.Info.Id, s.failureDetector.Info.Hostname, s.failureDetector.Info.Port, s.InFlow.Get(), s.OutFlow.Get()) + table
 	case "files":
 		fileMap := s.distributed.CollectMeta()
+		table, _ := files.CreateTable(fileMap)
 		*reply = fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Input: %f bytes/s, Output: %f bytes/s\n",
-			s.failureDetector.Info.Id, s.failureDetector.Info.Hostname, s.failureDetector.Info.Port, s.InFlow.Get(), s.OutFlow.Get()) + files.CreateTable(fileMap)
+			s.failureDetector.Info.Id, s.failureDetector.Info.Hostname, s.failureDetector.Info.Port, s.InFlow.Get(), s.OutFlow.Get()) + table
 	case "create":
 		err := s.distributed.Create(args.Filename, args.FileSource, 2)
 		if err != nil {
@@ -59,7 +62,7 @@ func (s *Server) CLI(args Args, reply *string) error {
 	case "get":
 		err := s.distributed.Get(args.Filename, args.FileSource, 2)
 		if err != nil {
-			*reply = fmt.Sprintf("Failed to download %s: %s", args.Filename, err.Error())
+			*reply = fmt.Sprintf("Failed to download %s: %s", args.Filename, err.Error()) 
 		} else {
 			*reply = fmt.Sprintf("File download to %s successfully!", args.FileSource)
 		}
@@ -80,6 +83,25 @@ func (s *Server) CLI(args Args, reply *string) error {
 	default:
 		*reply = "Unknown command."
 	}
+	return nil
+}
+
+func (s *Server) Files(_ int, reply *map[uint64]files.Meta) error {
+	*reply = s.distributed.CollectMeta()
+	return nil
+}
+
+func (s *Server) Member(_ int, reply *map[uint64]member.Info) error {
+	*reply = s.distributed.Membership.GetInfoMap()
+	return nil
+}
+
+func (s *Server) GetReplicas(Id uint64, reply *[]member.Info) error {
+	replicas, err := s.distributed.Membership.GetReplicas(Id, s.distributed.NumOfReplicas)
+	if err != nil {
+		return err
+	}
+	*reply = replicas
 	return nil
 }
 
