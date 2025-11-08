@@ -1,10 +1,12 @@
 package distributed
 
 import (
+	"bytes"
 	"cs425/mp3/internal/files"
 	"cs425/mp3/internal/flow"
 	"cs425/mp3/internal/member"
 	"cs425/mp3/internal/queue"
+	"encoding/gob"
 	"fmt"
 	"log"
 	"net"
@@ -65,8 +67,18 @@ type DistributedFiles struct {
 	locklockedMeta       sync.RWMutex             // Lock for locked metadata (to ensure atomic operation)
 
 	// Flow counter and State
-	OutFlow              *flow.FlowCounter
+	Flow                 *flow.FlowCounter
 	State                State
+}
+
+func PayloadSize(payload any) int64 {
+	buffer := bytes.Buffer{}
+	encoder := gob.NewEncoder(&buffer)
+	err := encoder.Encode(payload)
+	if err != nil {
+		return 0
+	}
+	return int64(buffer.Len())
 }
 
 func (d *DistributedFiles) RemoteCall(
@@ -96,6 +108,8 @@ func (d *DistributedFiles) RemoteCall(
 	case <-time.After(CALL_TIMEOUT):
 		return fmt.Errorf("%s call to server %s:%d timed out", funcName, hostname, port)
 	}
+	// record out flow
+	d.Flow.Add(PayloadSize(args) + PayloadSize(reply))
 	return nil
 }
 

@@ -112,6 +112,11 @@ func (s *Server) Leave(_ int, reply *string) error {
 	return nil
 }
 
+func (s *Server) GetFlow(_ int, reply *float64) error {
+	*reply = s.distributed.Flow.Get()
+	return nil
+}
+
 func (s *Server) registerRPC() {
 	s.fileManager.RegisterRPC()
 	s.distributed.RegisterRPC()
@@ -223,6 +228,7 @@ func main() {
 	// create network flow counter
 	inFlow := flow.FlowCounter{}
 	outFlow := flow.FlowCounter{}
+	FlowDF := flow.FlowCounter{}
 
 	// create failure detector
 	failureDetector := detector.FD{
@@ -259,6 +265,7 @@ func main() {
 		BufferedBlocks:       queue.NewQueue(),
 		BufferedBlockMap:     make(map[uint64]distributed.BufferedBlock),
 		LockedMeta:           make(map[uint64]files.Meta),
+		Flow:                &FlowDF,
 	}
 
 	// Create Server
