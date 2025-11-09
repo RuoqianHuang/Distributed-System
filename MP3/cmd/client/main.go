@@ -54,7 +54,6 @@ func main() {
 		log.Println("Example: ./client member files")
 		log.Println("Available commands: member, status, files, create, append, get")
 	}
-	// TODO: relative path -> abs path
 	port := 8788
 	hostname := "localhost"
 
