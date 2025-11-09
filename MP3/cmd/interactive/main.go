@@ -79,8 +79,8 @@ func displayMember(hostname string, port int) (string, member.Info, error) {
 	}
 
 	table, sortedId := member.CreateTable(*infoMap)
-	options := []string{"exit"}
-	menuMember := menu.NewMenu("Members: ", table, sortedId, options, false)
+	options := []string{"exit", "meta", "block"}
+	menuMember := menu.NewMenu("Members: ", table, sortedId, options, true)
 	opt, id, err := menuMember.Display()
 	return opt, (*infoMap)[id], err
 }
@@ -133,6 +133,28 @@ func displayReplicas(hostname string, port int, blockInfo files.BlockInfo) (stri
 	return opt, repMap[id], err
 }
 
+func displayAllMeta(hostname string, port int) {
+	metaMap := new(map[uint64]files.Meta)
+	err := CallWithTimeout("FileManager.GetAllMeta", hostname, port, 0, metaMap)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	table, sortedId := files.CreateTable(*metaMap)
+	options := []string{"exit"}
+	menuMember := menu.NewMenu("All Meta", table, sortedId, options, true)
+	menuMember.Display()
+}
+
+func displayAllBlock(hostname string, port int) (string, files.BlockInfo, error) {
+	blockMap := new(map[uint64]files.BlockInfo)
+	table, sortedId := files.CreateBlockTable(*blockMap)
+	options := []string{"exit", "download"}
+	menuBlock := menu.NewMenu("All blocks", table, sortedId, options, true)
+	opt, id, err := menuBlock.Display()
+	return opt, (*blockMap)[id], err
+}
+
+
 func main() {
 	// handle syscall SIGTERM
 	c := make(chan os.Signal, 1)
@@ -155,7 +177,33 @@ func main() {
 			break
 		}
 		if opt == "members" {
-			displayMember(hostname, port)
+			opt, replica, err := displayMember(hostname, port)
+			if err == nil && opt != "exit" {
+				if opt == "meta" { // display meta
+					displayAllMeta(replica.Hostname, replica.Port + 1)
+				} else {
+					for {
+						opt, blockInfo, err := displayAllBlock(replica.Hostname, replica.Port + 1)
+						if err != nil || opt == "exit" {
+							break
+						}
+						filename := readFileName()
+						blockPack := new(files.BlockPackage)
+						err = CallWithTimeout("FileManager.ReadBlock", replica.Hostname, replica.Port + 1, blockInfo.Id, blockPack)
+						if err != nil {
+							log.Fatal(err.Error())
+						}	
+						// write block to local file
+						err = os.WriteFile(filename, blockPack.Data, 0644)
+						if err != nil {
+							log.Fatalf("Failed to downbload %s block %d: %s", blockInfo.FileName, blockInfo.BlockNumber, err.Error())
+						} else {
+							log.Printf("Block %d of %s download to %s successfully!", blockInfo.BlockNumber, blockInfo.FileName, filename)
+						}
+						return
+					}
+				}
+			}
 		} else {
 			opt, meta, err := displayFiles(hostname, port)
 			if err == nil && opt != "exit" {

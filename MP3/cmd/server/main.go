@@ -37,7 +37,7 @@ type Args struct {
 func (s *Server) CLI(args Args, reply *string) error {
 	switch args.Command {
 	case "ls":
-		*reply = s.distributed.ListReplicas(args.Filename)
+		*reply = s.distributed.ListReplicas(args.Filename, 2)
 	case "member":
 		infoMap := s.failureDetector.Membership.GetInfoMap()
 		table, _ := member.CreateTable(infoMap)
@@ -74,12 +74,11 @@ func (s *Server) CLI(args Args, reply *string) error {
 			*reply = fmt.Sprintf("%s append successfully!", args.Filename)
 		}
 	case "getfromreplica":
-		err := s.distributed.GetFromReplica(args.VMAddress, args.Filename, args.FileSource)
-		if err != nil {
-			*reply = fmt.Sprintf("Failed: %s", err.Error())
-		} else {
-			*reply = fmt.Sprintf("File downloaded from %s to %s", args.VMAddress, args.FileSource)
-		}
+		*reply = "Not implemented, please refer to the interactive client"
+	case "flow":
+		flow := new(float64)
+		s.GetFlow(0, flow)
+		*reply = fmt.Sprintf("Current flow: %f bytes/s", *flow)
 	default:
 		*reply = "Unknown command."
 	}
@@ -226,9 +225,10 @@ func main() {
 	}
 
 	// create network flow counter
-	inFlow := flow.FlowCounter{}
-	outFlow := flow.FlowCounter{}
-	FlowDF := flow.FlowCounter{}
+	// TODO: merge flow counters
+	inFlow := flow.NewFlowCounter()
+	outFlow := flow.NewFlowCounter()
+	FlowDF := flow.NewFlowCounter()
 
 	// create failure detector
 	failureDetector := detector.FD{
@@ -239,8 +239,8 @@ func main() {
 		Id:         myId,
 		Info:       myInfo,
 		Membership: &membership,
-		InFlow:     &inFlow,
-		OutFlow:    &outFlow,
+		InFlow:     inFlow,
+		OutFlow:    outFlow,
 	}
 
 	// create local file manager
@@ -265,7 +265,7 @@ func main() {
 		BufferedBlocks:       queue.NewQueue(),
 		BufferedBlockMap:     make(map[uint64]distributed.BufferedBlock),
 		LockedMeta:           make(map[uint64]files.Meta),
-		Flow:                &FlowDF,
+		Flow:                 FlowDF,
 	}
 
 	// Create Server
@@ -273,8 +273,6 @@ func main() {
 		distributed:     &distributed,
 		fileManager:     fileManager,
 		failureDetector: &failureDetector,
-		InFlow:          &inFlow,
-		OutFlow:         &outFlow,
 	}
 
 	// start
