@@ -147,6 +147,10 @@ func displayAllMeta(hostname string, port int) {
 
 func displayAllBlock(hostname string, port int) (string, files.BlockInfo, error) {
 	blockMap := new(map[uint64]files.BlockInfo)
+	err := CallWithTimeout("FileManager.GetAllBlockInfo", hostname, port, 0, blockMap)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 	table, sortedId := files.CreateBlockTable(*blockMap)
 	options := []string{"exit", "download"}
 	menuBlock := menu.NewMenu("All blocks", table, sortedId, options, true)
@@ -177,8 +181,12 @@ func main() {
 			break
 		}
 		if opt == "members" {
-			opt, replica, err := displayMember(hostname, port)
-			if err == nil && opt != "exit" {
+			for {
+				opt, replica, err := displayMember(hostname, port)
+				if err != nil || opt == "exit" {
+					break
+				}
+
 				if opt == "meta" { // display meta
 					displayAllMeta(replica.Hostname, replica.Port + 1)
 				} else {
@@ -205,8 +213,13 @@ func main() {
 				}
 			}
 		} else {
-			opt, meta, err := displayFiles(hostname, port)
-			if err == nil && opt != "exit" {
+			for {
+				opt, meta, err := displayFiles(hostname, port)
+
+				if err != nil || opt == "exit" {
+					break
+				}
+				if err == nil && opt != "exit" {
 				if opt == "download" {
 					filename := readFileName()
 					args := Args{
@@ -249,6 +262,8 @@ func main() {
 					}
 				}
 			}
+			}
+			
 		}
 	}
 }
