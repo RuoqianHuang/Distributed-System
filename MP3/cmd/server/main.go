@@ -69,7 +69,7 @@ func (s *Server) CLI(args Args, reply *string) error {
 	case "append":
 		err := s.distributed.Append(args.Filename, args.FileSource, 2)
 		if err != nil {
-			*reply = fmt.Sprintf("Failed to appedn %s: %s", args.Filename, err.Error())
+			*reply = fmt.Sprintf("Failed to append %s: %s", args.Filename, err.Error())
 		} else {
 			*reply = fmt.Sprintf("%s append successfully!", args.Filename)
 		}

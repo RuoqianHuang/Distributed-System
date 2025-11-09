@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -52,7 +53,8 @@ func main() {
 	if len(os.Args) < 2 {
 		log.Println("Usage: ./client <Query> -p <Port>")
 		log.Println("Example: ./client member files")
-		log.Println("Available commands: member, status, files, create, append, get")
+		log.Println("Available commands: member, status, files, create, append, get, ls, getfromreplica, multiappend")
+		log.Println("multiappend: multiappend HyDFSfilename VM1 localfilename1 VM2 localfilename2 ...")
 	}
 	port := 8788
 	hostname := "localhost"
@@ -111,6 +113,59 @@ func main() {
 			log.Fatalf("Can't resolve file path: %s: %s", otherArgs[3], err.Error())
 		}
 		args.FileSource = FileSource
+	}
+
+	if args.Command == "multiappend" {
+		if len(otherArgs) < 4 || (len(otherArgs)-2)%2 != 0 {
+			log.Fatal("Usage: multiappend HyDFSfilename VM1 localfilename1 VM2 localfilename2 ...")
+		}
+		args.Filename = otherArgs[1]
+		
+		type VMPair struct {
+			VM        string
+			LocalFile string
+		}
+		var pairs []VMPair
+		for i := 2; i < len(otherArgs); i += 2 {
+			if i+1 >= len(otherArgs) {
+				log.Fatal("Usage: multiappend HyDFSfilename VM1 localfilename1 VM2 localfilename2 ...")
+			}
+			vmAddress := otherArgs[i]
+			localFile := otherArgs[i+1]
+			
+			pairs = append(pairs, VMPair{
+				VM:        vmAddress,
+				LocalFile: localFile,
+			})
+		}
+		
+		// Launch simultaneous appends from all VMs
+		var wg sync.WaitGroup
+		results := make([]string, len(pairs))
+		for i, pair := range pairs {
+			wg.Add(1)
+			go func(idx int, vm, localFile string) {
+				defer wg.Done()
+				vmArgs := Args{
+					Command:    "append",
+					Filename:   args.Filename,
+					FileSource: localFile,
+				}
+				result := new(string)
+
+				vmPort := 8788 // Default RPC port
+				
+				CallWithTimeout(vm, vmPort, vmArgs, result)
+				results[idx] = fmt.Sprintf("VM %s: %s", vm, *result)
+			}(i, pair.VM, pair.LocalFile)
+		}
+		wg.Wait()
+		
+		log.Printf("\nMultiappend results for %s:\n", args.Filename)
+		for _, result := range results {
+			log.Printf("%s\n", result)
+		}
+		return
 	}
 
 	result := new(string)
