@@ -79,7 +79,7 @@ func displayMember(hostname string, port int) (string, member.Info, error) {
 	}
 
 	table, sortedId := member.CreateTable(*infoMap)
-	options := []string{"exit", "meta", "block"}
+	options := []string{"meta", "block", "exit"}
 	menuMember := menu.NewMenu("Members: ", table, sortedId, options, true)
 	opt, id, err := menuMember.Display()
 	return opt, (*infoMap)[id], err
@@ -92,7 +92,7 @@ func displayFiles(hostname string, port int) (string, files.Meta, error) {
 		log.Fatal(err.Error())
 	}
 	table, sortedId := files.CreateTable(*metaMap)
-	options := []string{"exit", "download", "detail"}
+	options := []string{"detail", "download", "exit"}
 	menuMember := menu.NewMenu("Files: ", table, sortedId, options, true)
 	opt, id, err := menuMember.Display()
 	return opt, (*metaMap)[id], err
@@ -105,7 +105,7 @@ func displayBlocks(meta files.Meta) (string, files.BlockInfo, error) {
 		blockMap[blockInfo.Id] = blockInfo
 	}
 	table, sortedId := files.CreateBlockTable(blockMap)
-	options := []string{"exit", "detail"}
+	options := []string{"detail", "exit"}
 	menuBlock := menu.NewMenu(fmt.Sprintf("Blocks of %s", meta.FileName), table, sortedId, options, true)
 	opt, id, err := menuBlock.Display()
 	return opt, blockMap[id], err
@@ -127,7 +127,7 @@ func displayReplicas(hostname string, port int, blockInfo files.BlockInfo) (stri
 	}
 	table, sortedId := member.CreateTable(repMap)
 	prompt := fmt.Sprintf("Replicas of %s block %d:", blockInfo.FileName, blockInfo.BlockNumber)
-	options := []string{"exit", "download"}
+	options := []string{"download", "exit"}
 	menuRep := menu.NewMenu(prompt, table, sortedId, options, true)
 	opt, id, err := menuRep.Display()
 	return opt, repMap[id], err
@@ -152,7 +152,7 @@ func displayAllBlock(hostname string, port int) (string, files.BlockInfo, error)
 		log.Fatal(err.Error())
 	}
 	table, sortedId := files.CreateBlockTable(*blockMap)
-	options := []string{"exit", "download"}
+	options := []string{"download", "exit"}
 	menuBlock := menu.NewMenu("All blocks", table, sortedId, options, true)
 	opt, id, err := menuBlock.Display()
 	return opt, (*blockMap)[id], err
