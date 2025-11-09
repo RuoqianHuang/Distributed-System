@@ -53,25 +53,41 @@ func (s *Server) CLI(args Args, reply *string) error {
 		*reply = fmt.Sprintf("ID: %d, Hostname: %s, Port: %d, Input: %f bytes/s, Output: %f bytes/s\n",
 			s.failureDetector.Info.Id, s.failureDetector.Info.Hostname, s.failureDetector.Info.Port, s.InFlow.Get(), s.OutFlow.Get()) + table
 	case "create":
-		err := s.distributed.Create(args.Filename, args.FileSource, 2)
+		replicas, err := s.distributed.Create(args.Filename, args.FileSource, 2)
 		if err != nil {
 			*reply = fmt.Sprintf("Failed to create file %s: %s", args.Filename, err.Error())
 		} else {
-			*reply = "File created successfully!"
+			// Format replica list
+			replicaList := ""
+			for i, r := range replicas {
+				if i > 0 {
+					replicaList += ", "
+				}
+				replicaList += fmt.Sprintf("%s:%d", r.Hostname, r.Port)
+			}
+			*reply = fmt.Sprintf("File created successfully! Replicated to: %s", replicaList)
 		}
 	case "get":
 		err := s.distributed.Get(args.Filename, args.FileSource, 2)
 		if err != nil {
 			*reply = fmt.Sprintf("Failed to download %s: %s", args.Filename, err.Error()) 
 		} else {
-			*reply = fmt.Sprintf("File download to %s successfully!", args.FileSource)
+			*reply = fmt.Sprintf("File downloaded to %s completed successfully!", args.FileSource)
 		}
 	case "append":
-		err := s.distributed.Append(args.Filename, args.FileSource, 2)
+		replicas, err := s.distributed.Append(args.Filename, args.FileSource, 2)
 		if err != nil {
 			*reply = fmt.Sprintf("Failed to append %s: %s", args.Filename, err.Error())
 		} else {
-			*reply = fmt.Sprintf("%s append successfully!", args.Filename)
+			// Format replica list
+			replicaList := ""
+			for i, r := range replicas {
+				if i > 0 {
+					replicaList += ", "
+				}
+				replicaList += fmt.Sprintf("%s:%d", r.Hostname, r.Port)
+			}
+			*reply = fmt.Sprintf("%s append successfully! Replicated to: %s", args.Filename, replicaList)
 		}
 	case "getfromreplica":
 		*reply = "Not implemented, please refer to the interactive client"

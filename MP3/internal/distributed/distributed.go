@@ -599,14 +599,14 @@ func (d *DistributedFiles) ReleaseLock(metaId uint64, reply *bool) error {
 }
 
 // Function for CLI calls
-func (d *DistributedFiles) Create(filename string, fileSource string, quorum int) error {
+func (d *DistributedFiles) Create(filename string, fileSource string, quorum int) ([]member.Info, error) {
 	metaId := files.GetIdFromFilename(filename)
 
 	// Lock the meta, so that no other process can write to this file
 	// Use the first replica as coordinator
 	replicas, err := d.Membership.GetReplicas(metaId, d.NumOfReplicas)
 	if err != nil {
-		return fmt.Errorf("failed to get replicas: %s", err.Error())
+		return nil, fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
 
 	// Try to accquire lock for 1s
@@ -618,7 +618,7 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 			break
 		}
 		if time.Since(startTime) > time.Second {
-			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+			return nil, fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -638,16 +638,16 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 	// Check file exist
 	meta, err := d.getRemoteMeta(metaId, quorum)
 	if err != nil {
-		return fmt.Errorf("failed to read remote meta: %s", err.Error())
+		return nil, fmt.Errorf("failed to read remote meta: %s", err.Error())
 	}
 	if meta.Counter > 0 {
-		return fmt.Errorf("file already exist")
+		return nil, fmt.Errorf("file already exist")
 	}
 
 	// Read block from file system
 	data, err := os.ReadFile(fileSource)
 	if err != nil {
-		return fmt.Errorf("failed to read file source: %s", err.Error())
+		return nil, fmt.Errorf("failed to read file source: %s", err.Error())
 	}
 	log.Printf("[DF] Create: read data from local source file %s", fileSource)
 	meta = files.CreateMeta(filename, uint64(len(data)))
@@ -665,9 +665,9 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 			blockInfo, err := meta.GetBlock(i)
 			if err != nil {
 				tries[i]++
-				if tries[i] >= d.NumOfTries {
-					return fmt.Errorf("failed to send block %d for %d times, abort", i, tries[i])
-				}
+			if tries[i] >= d.NumOfTries {
+				return nil, fmt.Errorf("failed to send block %d for %d times, abort", i, tries[i])
+			}
 			}
 			l := i * files.BLOCK_SIZE
 			r := min((i+1)*files.BLOCK_SIZE, int(meta.FileSize))
@@ -678,9 +678,9 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 			err = d.sendBufferedBlocks(blockPack, quorum)
 			if err != nil {
 				tries[i]++
-				if tries[i] >= d.NumOfTries {
-					return fmt.Errorf("failed to send block %d for %d times: %s, abort", i, tries[i], err.Error())
-				}
+			if tries[i] >= d.NumOfTries {
+				return nil, fmt.Errorf("failed to send block %d for %d times: %s, abort", i, tries[i], err.Error())
+			}
 			} else {
 				log.Printf("[DF] Block %d of %s sent successfully", i, filename)
 				success[i] = 1
@@ -704,9 +704,16 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 		}
 	}
 	if successCount >= quorum {
-		return nil
+		// Return list of successful replicas
+		successfulReplicas := make([]member.Info, 0, successCount)
+		for j, s := range success {
+			if s > 0 {
+				successfulReplicas = append(successfulReplicas, replicas[j])
+			}
+		}
+		return successfulReplicas, nil
 	}
-	return fmt.Errorf("failed reach quorum, expecting %d, but got %d", quorum, successCount)
+	return nil, fmt.Errorf("failed reach quorum, expecting %d, but got %d", quorum, successCount)
 }
 
 func (d *DistributedFiles) Get(filename string, destPath string, quorum int) error {
@@ -747,14 +754,14 @@ func (d *DistributedFiles) Get(filename string, destPath string, quorum int) err
 	return os.WriteFile(destPath, data, 0644)
 }
 
-func (d *DistributedFiles) Append(filename string, fileSource string, quorum int) error {
+func (d *DistributedFiles) Append(filename string, fileSource string, quorum int) ([]member.Info, error) {
 	// Read block from file system
 	data, err := os.ReadFile(fileSource)
 	if err != nil {
-		return fmt.Errorf("failed to read file source: %s", err.Error())
+		return nil, fmt.Errorf("failed to read file source: %s", err.Error())
 	}
 	if len(data) == 0 {
-		return fmt.Errorf("nothing to append to %s", filename)
+		return nil, fmt.Errorf("nothing to append to %s", filename)
 	}
 
 	metaId := files.GetIdFromFilename(filename)
@@ -762,7 +769,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	// Use the first replica as coordinator
 	replicas, err := d.Membership.GetReplicas(metaId, d.NumOfReplicas)
 	if err != nil {
-		return fmt.Errorf("failed to get replicas: %s", err.Error())
+		return nil, fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
 	// Try to accquire lock for 1s
 	startTime := time.Now()
@@ -773,7 +780,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 			break
 		}
 		if time.Since(startTime) > time.Second {
-			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+			return nil, fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -793,10 +800,10 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 
 	meta, err := d.getRemoteMeta(metaId, quorum)
 	if err != nil {
-		return fmt.Errorf("failed to read remote meta: %s", err.Error())
+		return nil, fmt.Errorf("failed to read remote meta: %s", err.Error())
 	}
 	if meta.Counter == 0 {
-		return fmt.Errorf("file does not exist")
+		return nil, fmt.Errorf("file does not exist")
 	}
 
 
@@ -863,7 +870,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 			break
 		}
 		if !success {
-			return fmt.Errorf("failed to get block %d after trying for 1s", lastBlock)
+			return nil, fmt.Errorf("failed to get block %d after trying for 1s", lastBlock)
 		}
 
 		success = false
@@ -876,7 +883,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 			break
 		}
 		if !success {
-			return fmt.Errorf("failed to send new block to replica after %d tries", d.NumOfTries)
+			return nil, fmt.Errorf("failed to send new block to replica after %d tries", d.NumOfTries)
 		}
 		log.Printf("[DF] Append: block %s-%d updated", filename, lastBlock)
 	}
@@ -896,7 +903,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 				if err != nil {
 					tries[i]++
 					if tries[i] >= d.NumOfTries {
-						return fmt.Errorf("failed to send block %d for %d times: %s, abort", i+lastBlock+1, tries[i], err.Error())
+						return nil, fmt.Errorf("failed to send block %d for %d times: %s, abort", i+lastBlock+1, tries[i], err.Error())
 					}
 				}
 				l := startPos + i*files.BLOCK_SIZE
@@ -910,7 +917,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 				if err != nil {
 					tries[i]++
 					if tries[i] >= d.NumOfTries {
-						return fmt.Errorf("failed to send block %d for %d times: %s, abort", i+lastBlock+1, tries[i], err.Error())
+						return nil, fmt.Errorf("failed to send block %d for %d times: %s, abort", i+lastBlock+1, tries[i], err.Error())
 					}
 				} else {
 					log.Printf("[DF] Block %d of %s sent successfully", i+lastBlock+1, filename)
@@ -936,9 +943,16 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 		}
 	}
 	if successCount >= quorum {
-		return nil
+		// Return list of successful replicas
+		successfulReplicas := make([]member.Info, 0, successCount)
+		for j, s := range success {
+			if s > 0 {
+				successfulReplicas = append(successfulReplicas, replicas[j])
+			}
+		}
+		return successfulReplicas, nil
 	}
-	return fmt.Errorf("failed reach quorum, expecting %d, but got %d", quorum, successCount)
+	return nil, fmt.Errorf("failed reach quorum, expecting %d, but got %d", quorum, successCount)
 }
 
 func (d *DistributedFiles) Merge(_ int, reply *int) error {

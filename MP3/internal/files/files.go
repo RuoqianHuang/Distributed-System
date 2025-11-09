@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
+	"cs425/mp3/internal/utils"
 )
 
 const MiB = 1024 * 1024
@@ -211,6 +213,11 @@ func (f *FileManager) ReadBlockInfo(id uint64, reply *BlockInfo) error {
 }
 
 func (f *FileManager) WriteBlock(args BlockPackage, reply *uint64) error {
+	// Print when replica receives the request
+	hostname, _ := utils.GetHostName()
+	fmt.Printf("[%s] Replica %s received write request for block %s-%d (counter=%d, size=%d bytes)\n", 
+		time.Now().Format("15:04:05.000"), hostname, args.BlockInfo.FileName, args.BlockInfo.BlockNumber, args.BlockInfo.Counter, len(args.Data))
+	
 	f.lock.Lock()
 	// Update local info
 	block, ok := f.localBlocks[args.BlockInfo.Id]
@@ -230,13 +237,34 @@ func (f *FileManager) WriteBlock(args BlockPackage, reply *uint64) error {
 	// Write block to local file system
 	cnt, err := block.Write(args.Data, args.BlockInfo.Counter)
 	*reply = cnt
+	
+	// Print when replica completes the operation
+	if err == nil {
+		fmt.Printf("[%s] Replica %s completed writing block %s-%d (counter=%d)\n", 
+			time.Now().Format("15:04:05.000"), hostname, args.BlockInfo.FileName, args.BlockInfo.BlockNumber, cnt)
+	} else {
+		fmt.Printf("[%s] Replica %s failed to write block %s-%d: %s\n", 
+			time.Now().Format("15:04:05.000"), hostname, args.BlockInfo.FileName, args.BlockInfo.BlockNumber, err.Error())
+	}
 	return err
 }
 
 func (f *FileManager) ReadBlock(id uint64, reply *BlockPackage) error {
+	hostname, _ := utils.GetHostName()
+	
 	f.lock.RLock()
 	block, ok := f.localBlocks[id]
 	f.lock.RUnlock()
+	
+	// Print when replica receives the request
+	if ok {
+		fmt.Printf("[%s] Replica %s received read request for block (id=%d, file=%s-%d)\n", 
+			time.Now().Format("15:04:05.000"), hostname, id, block.GetInfo().FileName, block.GetInfo().BlockNumber)
+	} else {
+		fmt.Printf("[%s] Replica %s received read request for block (id=%d, not found)\n", 
+			time.Now().Format("15:04:05.000"), hostname, id)
+	}
+	
 	if !ok {
 		// Block does not exist, return empty block with counter = 0
 		*reply = BlockPackage{
@@ -245,15 +273,32 @@ func (f *FileManager) ReadBlock(id uint64, reply *BlockPackage) error {
 				Counter: 0,
 			},
 		}
+		fmt.Printf("[%s] Replica %s completed reading block (id=%d, not found)\n", 
+			time.Now().Format("15:04:05.000"), hostname, id)
 		return nil
 	}
 	// Read from local file system
 	blockPack, err := block.Read()
 	*reply = blockPack
+	
+	// Print when replica completes the operation
+	if err == nil {
+		fmt.Printf("[%s] Replica %s completed reading block %s-%d (counter=%d, size=%d bytes)\n", 
+			time.Now().Format("15:04:05.000"), hostname, blockPack.BlockInfo.FileName, blockPack.BlockInfo.BlockNumber, blockPack.BlockInfo.Counter, len(blockPack.Data))
+	} else {
+		fmt.Printf("[%s] Replica %s failed to read block (id=%d): %s\n", 
+			time.Now().Format("15:04:05.000"), hostname, id, err.Error())
+	}
 	return err
 }
 
 func (f *FileManager) WriteMeta(file Meta, reply *uint64) error {
+	hostname, _ := utils.GetHostName()
+	
+	// Print when replica receives the request
+	fmt.Printf("[%s] Replica %s received write request for meta %s (counter=%d, size=%d bytes, blocks=%d)\n", 
+		time.Now().Format("15:04:05.000"), hostname, file.FileName, file.Counter, file.FileSize, file.FileBlocks)
+	
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	meta, ok := f.localFileMeta[file.Id]
@@ -263,10 +308,20 @@ func (f *FileManager) WriteMeta(file Meta, reply *uint64) error {
 		f.localFileMeta[file.Id] = file
 	}
 	*reply = f.localFileMeta[file.Id].Counter
+	
+	// Print when replica completes the operation
+	fmt.Printf("[%s] Replica %s completed writing meta %s (counter=%d)\n", 
+		time.Now().Format("15:04:05.000"), hostname, file.FileName, *reply)
 	return nil
 }
 
 func (f *FileManager) ReadMeta(id uint64, reply *Meta) error {
+	hostname, _ := utils.GetHostName()
+	
+	// Print when replica receives the request
+	fmt.Printf("[%s] Replica %s received read request for meta (id=%d)\n", 
+		time.Now().Format("15:04:05.000"), hostname, id)
+	
 	f.lock.RLock()
 	defer f.lock.RUnlock()
 	meta, ok := f.localFileMeta[id]
@@ -275,9 +330,15 @@ func (f *FileManager) ReadMeta(id uint64, reply *Meta) error {
 			Id:      id,
 			Counter: 0,
 		}
+		fmt.Printf("[%s] Replica %s completed reading meta (id=%d, not found)\n", 
+			time.Now().Format("15:04:05.000"), hostname, id)
 		return nil
 	}
 	*reply = meta
+	
+	// Print when replica completes the operation
+	fmt.Printf("[%s] Replica %s completed reading meta %s (id=%d, counter=%d, size=%d bytes)\n", 
+		time.Now().Format("15:04:05.000"), hostname, meta.FileName, id, meta.Counter, meta.FileSize)
 	return nil
 }
 
