@@ -221,6 +221,7 @@ func (d *DistributedFiles) workerLoopMeta(waitGroup *sync.WaitGroup) {
 		if d.State == Stop {
 			break
 		}
+		time.Sleep(50 * time.Millisecond) // Slow down meta worker so that CPU is not fully occupied
 
 		// Get job from queue
 		val := d.MetaJobs.Pop() // Blocking call
@@ -270,6 +271,7 @@ func (d *DistributedFiles) workerLoopBlock(waitGroup *sync.WaitGroup) {
 		if d.State == Stop {
 			break
 		}
+		time.Sleep(50 * time.Millisecond) // Slow down block worker so that CPU is not fully occupied
 
 		// Get job from queue
 		val := d.BlockJobs.Pop() // Blocking call
@@ -411,6 +413,7 @@ func (d *DistributedFiles) workerLoopBuffered(waitGroup *sync.WaitGroup) {
 		if d.State == Stop {
 			break
 		}
+		time.Sleep(50 * time.Millisecond) // Slow down buffered block worker so that CPU is not fully occupied
 
 		// Buffered block id from queue
 		val := d.BufferedBlocks.Pop() // Blocking call
