@@ -264,7 +264,7 @@ func main() {
 		BlockJobs:            queue.NewQueue(),
 		BufferedBlocks:       queue.NewQueue(),
 		BufferedBlockMap:     make(map[uint64]distributed.BufferedBlock),
-		LockedMeta:           make(map[uint64]files.Meta),
+		LockedMeta:           make(map[uint64]bool),
 		Flow:                 FlowDF,
 	}
 

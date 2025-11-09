@@ -63,7 +63,7 @@ type DistributedFiles struct {
 	BufferedBlockMap     map[uint64]BufferedBlock // Buffered blocks
 
 	// Lock for atomicity
-	LockedMeta           map[uint64]files.Meta    // Locked metadata (to ensure atomic operation)
+	LockedMeta           map[uint64]bool          // Locked metadata (to ensure atomic operation)
 	locklockedMeta       sync.RWMutex             // Lock for locked metadata (to ensure atomic operation)
 
 	// Flow counter and State
@@ -574,92 +574,85 @@ func (d *DistributedFiles) sendBufferedBlocks(blockPack files.BlockPackage, quor
 }
 
 // Locks
-func (d *DistributedFiles) GetLock(meta files.Meta, reply *files.Meta) error {
+func (d *DistributedFiles) GetLock(metaId uint64, reply *bool) error {
 	d.locklockedMeta.Lock()
 	defer d.locklockedMeta.Unlock()
-	lockedMeta, ok := d.LockedMeta[meta.Id]
+	_, ok := d.LockedMeta[metaId]
 	if ok {
-		*reply = lockedMeta
+		*reply = false
 		return fmt.Errorf("this file is currently locked")
 	}
-	// Read the latest meta from local storage before locking
-	// This ensures we have the most up-to-date file size
-	var latestMeta files.Meta
-	err := d.FileManager.ReadMeta(meta.Id, &latestMeta)
-	if err != nil {
-		// If read fails, use the provided meta
-		latestMeta = meta
-	} else if latestMeta.Counter == 0 {
-		// If file doesn't exist, use the provided meta
-		latestMeta = meta
-	}
-	// lock with the latest meta
-	d.LockedMeta[meta.Id] = latestMeta
-	*reply = latestMeta
+	d.LockedMeta[metaId] = true
+	*reply = true
 	return nil
 }
 
-func (d *DistributedFiles) ReleaseLock(meta files.Meta, reply *files.Meta) error {
+func (d *DistributedFiles) ReleaseLock(metaId uint64, reply *bool) error {
 	d.locklockedMeta.Lock()
 	defer d.locklockedMeta.Unlock()
-	_, ok := d.LockedMeta[meta.Id]
+	_, ok := d.LockedMeta[metaId]
 	if ok {
 		// unlock meta
-		delete(d.LockedMeta, meta.Id)
+		delete(d.LockedMeta, metaId)
 	}
 	return nil
 }
 
 // Function for CLI calls
 func (d *DistributedFiles) Create(filename string, fileSource string, quorum int) error {
-	id := files.GetIdFromFilename(filename)
-	meta, err := d.getRemoteMeta(id, quorum)
-	if err != nil {
-		return fmt.Errorf("failed to read remote meta: %s", err.Error())
-	}
-	if meta.Counter > 0 {
-		return fmt.Errorf("file already exist")
-	}
-	// Read block from file system
-	data, err := os.ReadFile(fileSource)
-	if err != nil {
-		return fmt.Errorf("failed to read file source: %s", err.Error())
-	}
-	log.Printf("[DF] Create: read data from local source file %s", fileSource)
+	metaId := files.GetIdFromFilename(filename)
 
-	meta = files.CreateMeta(filename, uint64(len(data)))
-	result := new(files.Meta)
 	// Lock the meta, so that no other process can write to this file
 	// Use the first replica as coordinator
-	replicas, err := d.Membership.GetReplicas(meta.Id, d.NumOfReplicas)
+	replicas, err := d.Membership.GetReplicas(metaId, d.NumOfReplicas)
 	if err != nil {
 		return fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
+
 	// Try to accquire lock for 1s
 	startTime := time.Now()
 	for {
-		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+		result := new(bool)
+		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
 		if err == nil {
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
 		if time.Since(startTime) > time.Second {
 			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	
-	log.Printf("[DF] Create: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
-	log.Printf("[DF] Cteate: start create file: %s, file size: %d bytes, num of blocks: %d", filename, len(data), meta.FileBlocks)
 	defer func() {
 		// Release lock
 		for i := 0; i < d.NumOfTries; i++ { // Try
-			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+			result := new(bool)
+			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
 			if err == nil {
 				log.Printf("[DF] lock for %s released", filename)
 				break
 			}
 		}
 	}()
+	log.Printf("[DF] Create: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
+
+	// Check file exist
+	meta, err := d.getRemoteMeta(metaId, quorum)
+	if err != nil {
+		return fmt.Errorf("failed to read remote meta: %s", err.Error())
+	}
+	if meta.Counter > 0 {
+		return fmt.Errorf("file already exist")
+	}
+
+	// Read block from file system
+	data, err := os.ReadFile(fileSource)
+	if err != nil {
+		return fmt.Errorf("failed to read file source: %s", err.Error())
+	}
+	log.Printf("[DF] Create: read data from local source file %s", fileSource)
+	meta = files.CreateMeta(filename, uint64(len(data)))
+
+	log.Printf("[DF] Cteate: start create file: %s, file size: %d bytes, num of blocks: %d", filename, len(data), meta.FileBlocks)
 
 	// Send blocks
 	tries := make([]int, meta.FileBlocks)
@@ -755,14 +748,6 @@ func (d *DistributedFiles) Get(filename string, destPath string, quorum int) err
 }
 
 func (d *DistributedFiles) Append(filename string, fileSource string, quorum int) error {
-	id := files.GetIdFromFilename(filename)
-	meta, err := d.getRemoteMeta(id, quorum)
-	if err != nil {
-		return fmt.Errorf("failed to read remote meta: %s", err.Error())
-	}
-	if meta.Counter == 0 {
-		return fmt.Errorf("file does not exist")
-	}
 	// Read block from file system
 	data, err := os.ReadFile(fileSource)
 	if err != nil {
@@ -771,51 +756,54 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	if len(data) == 0 {
 		return fmt.Errorf("nothing to append to %s", filename)
 	}
-	log.Printf("[DF] Append: read data from local source file %s", fileSource)
 
+	metaId := files.GetIdFromFilename(filename)
 	// Lock the meta, so that no other process can write to this file
 	// Use the first replica as coordinator
-	result := new(files.Meta)
-	replicas, err := d.Membership.GetReplicas(meta.Id, d.NumOfReplicas)
+	replicas, err := d.Membership.GetReplicas(metaId, d.NumOfReplicas)
 	if err != nil {
 		return fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
 	// Try to accquire lock for 1s
 	startTime := time.Now()
 	for {
-		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+		result := new(bool)
+		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
 		if err == nil {
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
 		if time.Since(startTime) > time.Second {
 			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
 		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	
 	log.Printf("[DF] Append: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
 	defer func() {
 		// Release lock
 		for i := 0; i < d.NumOfTries; i++ { // Try
-			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+			result := new(bool)
+			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
 			if err == nil {
 				log.Printf("[DF] lock for %s released", filename)
 				break
 			}
 		}
 	}()
-	
-	// Use the meta returned by GetLock, which is the latest meta from the coordinator
-	// This ensures we have the most up-to-date file size
-	meta = *result
-	if meta.Counter == 0 {
-		// Release lock before returning error
-		d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
-		return fmt.Errorf("file does not exist after acquiring lock")
+
+	meta, err := d.getRemoteMeta(metaId, quorum)
+	if err != nil {
+		return fmt.Errorf("failed to read remote meta: %s", err.Error())
 	}
-	log.Printf("[DF] Append: re-read meta after lock - file size: %d bytes, counter: %d", meta.FileSize, meta.Counter)
+	if meta.Counter == 0 {
+		return fmt.Errorf("file does not exist")
+	}
+
+
+	// Use the meta retrived after meta is locked. 
+	// This ensures we have the most up-to-date file size
+	log.Printf("[DF] Append: read data from local source file %s", fileSource)
 	log.Printf("[DF] Append: appending %d bytes from %s", len(data), fileSource)
-	
 	newSize := meta.FileSize + uint64(len(data))
 	newMeta := files.Meta{
 		Id:         meta.Id,
