@@ -281,6 +281,16 @@ func (f *FileManager) ReadMeta(id uint64, reply *Meta) error {
 	return nil
 }
 
+func (f *FileManager) GetAllMeta(_ int, reply *map[uint64]Meta) error {
+	*reply = f.GetMetas()
+	return nil
+}
+
+func (f *FileManager) GetAllBlockInfo(_ int, reply *map[uint64]BlockInfo) error {
+	*reply = f.GetBlocks()
+	return nil
+}
+
 func CreateTable(fileMap map[uint64]Meta) (string, []uint64) {
 	// Return table string and sorted Id
 	type Pair struct {
