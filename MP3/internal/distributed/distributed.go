@@ -623,10 +623,19 @@ func (d *DistributedFiles) Create(filename string, fileSource string, quorum int
 	if err != nil {
 		return fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
-	err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
-	if err != nil {
-		return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+	// Try to accquire lock for 1s
+	startTime := time.Now()
+	for {
+		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+		if time.Since(startTime) > time.Second {
+			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+		}
 	}
+	
 	log.Printf("[DF] Create: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
 	log.Printf("[DF] Cteate: start create file: %s, file size: %d bytes, num of blocks: %d", filename, len(data), meta.FileBlocks)
 	defer func() {
@@ -759,10 +768,19 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	if err != nil {
 		return fmt.Errorf("failed to get replicas: %s", err.Error())
 	}
-	err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
-	if err != nil {
-		return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+	// Try to accquire lock for 1s
+	startTime := time.Now()
+	for {
+		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+		if time.Since(startTime) > time.Second {
+			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+		}
 	}
+	
 	log.Printf("[DF] Append: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
 	defer func() {
 		// Release lock
