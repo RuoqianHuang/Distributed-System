@@ -582,8 +582,20 @@ func (d *DistributedFiles) GetLock(meta files.Meta, reply *files.Meta) error {
 		*reply = lockedMeta
 		return fmt.Errorf("this file is currently locked")
 	}
-	// lock new meta
-	d.LockedMeta[meta.Id] = meta
+	// Read the latest meta from local storage before locking
+	// This ensures we have the most up-to-date file size
+	var latestMeta files.Meta
+	err := d.FileManager.ReadMeta(meta.Id, &latestMeta)
+	if err != nil {
+		// If read fails, use the provided meta
+		latestMeta = meta
+	} else if latestMeta.Counter == 0 {
+		// If file doesn't exist, use the provided meta
+		latestMeta = meta
+	}
+	// lock with the latest meta
+	d.LockedMeta[meta.Id] = latestMeta
+	*reply = latestMeta
 	return nil
 }
 
@@ -792,6 +804,18 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 			}
 		}
 	}()
+	
+	// Use the meta returned by GetLock, which is the latest meta from the coordinator
+	// This ensures we have the most up-to-date file size
+	meta = *result
+	if meta.Counter == 0 {
+		// Release lock before returning error
+		d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, meta, result)
+		return fmt.Errorf("file does not exist after acquiring lock")
+	}
+	log.Printf("[DF] Append: re-read meta after lock - file size: %d bytes, counter: %d", meta.FileSize, meta.Counter)
+	log.Printf("[DF] Append: appending %d bytes from %s", len(data), fileSource)
+	
 	newSize := meta.FileSize + uint64(len(data))
 	newMeta := files.Meta{
 		Id:         meta.Id,
@@ -803,23 +827,40 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	log.Printf("[DF] Append: new file info filename: %s, file size: %d bytes, num of blocks: %d", filename, newSize, newMeta.FileBlocks)
 
 	residual := int(meta.FileSize % files.BLOCK_SIZE)
-	startPos := min(files.BLOCK_SIZE-residual, len(data))
 	lastBlock := meta.FileBlocks - 1
+	startPos := 0 // Position in data[] where new blocks start (after filling last block if needed)
 
+	log.Printf("[DF] Append: residual=%d, lastBlock=%d, dataLen=%d", residual, lastBlock, len(data))
+	
 	if residual != 0 {
+		// Calculate how much data to fill into the last block
+		startPos = min(files.BLOCK_SIZE-residual, len(data))
+		log.Printf("[DF] Append: filling last block %d with %d bytes (residual space: %d)", lastBlock, startPos, files.BLOCK_SIZE-residual)
 		// We need to get the last block and update it
 		success := false
 		blockPack := files.BlockPackage{}
 		lastBlockInfo, _ := newMeta.GetBlock(lastBlock)
+		log.Printf("[DF] Append: reading last block %d (id=%d, expected residual=%d)", lastBlock, lastBlockInfo.Id, residual)
 		for t := 0; t < d.NumOfTries; t++ {
 			pack, err := d.getRemoteBlock(lastBlockInfo.Id, quorum)
 			if err != nil {
+				log.Printf("[DF] Append: failed to read last block %d (try %d/%d): %s", lastBlock, t+1, d.NumOfTries, err.Error())
 				continue
 			}
+			// Use the actual block length (might be different from residual if another append completed)
+			actualResidual := len(pack.Data)
+			if actualResidual != residual {
+				log.Printf("[DF] Append: WARNING - last block %d has length %d, expected %d (residual). Another append may have completed.", lastBlock, actualResidual, residual)
+				// Recalculate startPos based on actual residual
+				startPos = min(files.BLOCK_SIZE-actualResidual, len(data))
+				log.Printf("[DF] Append: adjusted startPos to %d based on actual residual %d", startPos, actualResidual)
+			}
+			log.Printf("[DF] Append: read last block %d: length=%d, appending %d bytes", lastBlock, actualResidual, startPos)
 			blockPack = files.BlockPackage{
 				BlockInfo: lastBlockInfo,
 				Data:      append(pack.Data, data[:startPos]...),
 			}
+			log.Printf("[DF] Append: updated last block %d: new length=%d", lastBlock, len(blockPack.Data))
 			success = true
 			break
 		}
@@ -845,6 +886,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	if lastBlock+1 < newMeta.FileBlocks {
 		// We have new blocks to update
 		blocksToUpdate := newMeta.FileBlocks - lastBlock - 1
+		log.Printf("[DF] Append: creating %d new blocks starting from position %d in data", blocksToUpdate, startPos)
 		tries := make([]int, blocksToUpdate)
 		success := make([]int, blocksToUpdate)
 		for t := 0; t < d.NumOfTries; t++ {
@@ -861,6 +903,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 				}
 				l := startPos + i*files.BLOCK_SIZE
 				r := min(l+files.BLOCK_SIZE, len(data))
+				log.Printf("[DF] Append: sending new block %d: data[%d:%d] (%d bytes)", lastBlock+i+1, l, r, r-l)
 				blockPack := files.BlockPackage{
 					BlockInfo: blockInfo,
 					Data:      data[l:r],
