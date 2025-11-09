@@ -255,8 +255,8 @@ func main() {
 		Membership:           &membership,
 		NumOfReplicas:        3,
 		NumOfMetaWorkers:     1,
-		NumOfBlockWorkers:    2,
-		NumOfBufferedWorkers: 2,
+		NumOfBlockWorkers:    1,
+		NumOfBufferedWorkers: 1,
 		NumOfTries:           3,
 		MetaJobMap:          make(map[uint64]bool),
 		MetaJobs:             queue.NewQueue(),
@@ -273,6 +273,8 @@ func main() {
 		distributed:     &distributed,
 		fileManager:     fileManager,
 		failureDetector: &failureDetector,
+		InFlow:     inFlow,
+		OutFlow:    outFlow,
 	}
 
 	// start
