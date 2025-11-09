@@ -829,12 +829,22 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 		blockPack := files.BlockPackage{}
 		lastBlockInfo, _ := newMeta.GetBlock(lastBlock)
 		log.Printf("[DF] Append: reading last block %d (id=%d, expected residual=%d)", lastBlock, lastBlockInfo.Id, residual)
-		for t := 0; t < d.NumOfTries; t++ {
+		
+		// try to get the latest block for 1s
+		startTime := time.Now()
+		for {
+			if time.Since(startTime) > time.Second {
+				break
+			}
 			pack, err := d.getRemoteBlock(lastBlockInfo.Id, quorum)
 			if err != nil {
-				log.Printf("[DF] Append: failed to read last block %d (try %d/%d): %s", lastBlock, t+1, d.NumOfTries, err.Error())
+				time.Sleep(50 * time.Millisecond)
+				continue
+			} else if pack.BlockInfo.Counter < meta.Counter {
+				time.Sleep(50 * time.Millisecond)
 				continue
 			}
+			
 			// Use the actual block length (might be different from residual if another append completed)
 			actualResidual := len(pack.Data)
 			if actualResidual != residual {
@@ -853,7 +863,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 			break
 		}
 		if !success {
-			return fmt.Errorf("failed to get block %d after %d tries", lastBlock, d.NumOfTries)
+			return fmt.Errorf("failed to get block %d after trying for 1s", lastBlock)
 		}
 
 		success = false
