@@ -1093,8 +1093,8 @@ func (d *DistributedFiles) ListReplicas(filename string, quorum int) string {
 
 	// Get replicas for blocks
 	for i := 0; i < meta.FileBlocks; i++ {
-		result += fmt.Sprintf("Block %d:\n", i)
 		blockInfo, _ := meta.GetBlock(i)
+		result += fmt.Sprintf("Block %d, Block Id: %d:\n", i, blockInfo.Id)
 		replicas, err := d.Membership.GetReplicas(blockInfo.Id, d.NumOfReplicas)
 		if err != nil {
 			result += fmt.Sprintf("Failed to get replicas for block %d: %s\n", i, err.Error())
