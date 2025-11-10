@@ -92,7 +92,7 @@ func displayFiles(hostname string, port int) (string, files.Meta, error) {
 		log.Fatal(err.Error())
 	}
 	table, sortedId := files.CreateTable(*metaMap)
-	options := []string{"detail", "download", "exit"}
+	options := []string{"detail", "download", "merge", "exit"}
 	menuMember := menu.NewMenu("Files: ", table, sortedId, options, true)
 	opt, id, err := menuMember.Display()
 	return opt, (*metaMap)[id], err
@@ -145,6 +145,18 @@ func displayAllMeta(hostname string, port int) {
 	menuMember.Display()
 }
 
+func mergeFile(filename string, hostname string, port int) {
+	infoMap := new(map[uint64]member.Info)
+	err := CallWithTimeout("Server.Member", hostname, port, 0, infoMap)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	for _, replica := range *infoMap {
+		dummy := new(bool)
+		CallWithTimeout("DistributedFiles.MergeFile", replica.Hostname, replica.Port + 1, filename, dummy)
+	}
+}
+
 func displayAllBlock(hostname string, port int) (string, files.BlockInfo, error) {
 	blockMap := new(map[uint64]files.BlockInfo)
 	err := CallWithTimeout("FileManager.GetAllBlockInfo", hostname, port, 0, blockMap)
@@ -171,7 +183,6 @@ func main() {
 
 	port := 8788
 	hostname := "localhost"
-
 
 	for {
 		options := []string{"members", "files", "exit"}
@@ -219,49 +230,53 @@ func main() {
 				if err != nil || opt == "exit" {
 					break
 				}
-				if err == nil && opt != "exit" {
-				if opt == "download" {
-					filename := readFileName()
-					args := Args{
-						Command: "get",
-						Filename: meta.FileName,
-						FileSource: filename,
-					}
-					reply := new(string)
-					err = CallWithTimeout("Server.CLI", hostname, port, args, reply)
-					if err != nil {
-						log.Fatal(err.Error())
-					} else {
-						log.Print(*reply)
-					}
-					break
-				} else {
-					// Detail
-					for {
-						opt, blockInfo, err := displayBlocks(meta)
-						if err != nil || opt == "exit" {
-							break
-						} 
-						opt, replica, _ := displayReplicas(hostname, port, blockInfo)
-						if err == nil && opt == "download" {
-							filename := readFileName()
-							blockPack := new(files.BlockPackage)
-							err := CallWithTimeout("FileManager.ReadBlock", replica.Hostname, replica.Port + 1, blockInfo.Id, blockPack)
-							if err != nil {
-								log.Fatal(err.Error())
-							}
-							// write block to local file
-							err = os.WriteFile(filename, blockPack.Data, 0644)
-							if err != nil {
-								log.Fatalf("Failed to downbload %s block %d: %s", blockInfo.FileName, blockInfo.BlockNumber, err.Error())
-							} else {
-								log.Printf("Block %d of %s download to %s successfully!", blockInfo.BlockNumber, blockInfo.FileName, filename)
-							}
-							return
+				if opt != "exit" {
+					if opt == "download" {
+						filename := readFileName()
+						args := Args{
+							Command: "get",
+							Filename: meta.FileName,
+							FileSource: filename,
 						}
+						reply := new(string)
+						err = CallWithTimeout("Server.CLI", hostname, port, args, reply)
+						if err != nil {
+							log.Fatal(err.Error())
+						} else {
+							log.Print(*reply)
+						}
+						break
+					} else if opt == "detail" {
+						// Detail
+						for {
+							opt, blockInfo, err := displayBlocks(meta)
+							if err != nil || opt == "exit" {
+								break
+							} 
+							opt, replica, _ := displayReplicas(hostname, port, blockInfo)
+							if opt == "download" {
+								filename := readFileName()
+								blockPack := new(files.BlockPackage)
+								err := CallWithTimeout("FileManager.ReadBlock", replica.Hostname, replica.Port + 1, blockInfo.Id, blockPack)
+								if err != nil {
+									log.Fatal(err.Error())
+								}
+								// write block to local file
+								err = os.WriteFile(filename, blockPack.Data, 0644)
+								if err != nil {
+									log.Fatalf("Failed to downbload %s block %d: %s", blockInfo.FileName, blockInfo.BlockNumber, err.Error())
+								} else {
+									log.Printf("Block %d of %s download to %s successfully!", blockInfo.BlockNumber, blockInfo.FileName, filename)
+								}
+								return
+							}
+						}
+					} else { // merge
+						mergeFile(meta.FileName, hostname, port)
+						fmt.Printf("File %s merged, Press Enter to continue...", meta.FileName)
+						bufio.NewReader(os.Stdin).ReadBytes('\n') 
 					}
 				}
-			}
 			}
 			
 		}
