@@ -30,45 +30,45 @@ type State int
 
 const (
 	Alive State = iota
-	Stop  
+	Stop
 )
 
 type DistributedFiles struct {
-	Tround               time.Duration
-	Hostname             string
-	Port                 int
-	
-	FileManager          *files.FileManager
-	Membership           *member.Membership
+	Tround   time.Duration
+	Hostname string
+	Port     int
+
+	FileManager *files.FileManager
+	Membership  *member.Membership
 
 	NumOfReplicas        int
 	NumOfMetaWorkers     int
 	NumOfBlockWorkers    int
 	NumOfBufferedWorkers int
-	NumOfTries           int                      // Number of tries uploading blocks
-	
+	NumOfTries           int // Number of tries uploading blocks
+
 	// Job to merge blocks
-	BlockJobs            *queue.Queue             // Merge job queue for blocks
-	BlockJobMap          map[uint64]bool          // Map to check if it's in queue
-	lockBlockJobMap      sync.RWMutex             // lock for BlockJobMap
+	BlockJobs       *queue.Queue    // Merge job queue for blocks
+	BlockJobMap     map[uint64]bool // Map to check if it's in queue
+	lockBlockJobMap sync.RWMutex    // lock for BlockJobMap
 
 	// Job to merge meta
-	MetaJobs             *queue.Queue             // Merge job queue for metadata
-	MetaJobMap           map[uint64]bool          // Map to check if it's in queue
-	lockMetaJobMap       sync.RWMutex             // lock for MetaJobMap
+	MetaJobs       *queue.Queue    // Merge job queue for metadata
+	MetaJobMap     map[uint64]bool // Map to check if it's in queue
+	lockMetaJobMap sync.RWMutex    // lock for MetaJobMap
 
 	// Job to commit buffered blocks
-	BufferedBlocks       *queue.Queue             // Buffered block queue
-	lockBufferedBlocks   sync.RWMutex             // Lock for buffered blocks
-	BufferedBlockMap     map[uint64]BufferedBlock // Buffered blocks
+	BufferedBlocks     *queue.Queue             // Buffered block queue
+	lockBufferedBlocks sync.RWMutex             // Lock for buffered blocks
+	BufferedBlockMap   map[uint64]BufferedBlock // Buffered blocks
 
 	// Lock for atomicity
-	LockedMeta           map[uint64]bool          // Locked metadata (to ensure atomic operation)
-	locklockedMeta       sync.RWMutex             // Lock for locked metadata (to ensure atomic operation)
+	LockedMeta     map[uint64]bool // Locked metadata (to ensure atomic operation)
+	locklockedMeta sync.RWMutex    // Lock for locked metadata (to ensure atomic operation)
 
 	// Flow counter and State
-	Flow                 *flow.FlowCounter
-	State                State
+	Flow  *flow.FlowCounter
+	State State
 }
 
 func PayloadSize(payload any) int64 {
@@ -150,7 +150,7 @@ func (d *DistributedFiles) jobCreator(waitGroup *sync.WaitGroup) {
 
 	for range ticker.C {
 		// Create new merge job
-		result := new(int)
+		result := new(bool)
 		d.Merge(0, result)
 	}
 }
@@ -784,7 +784,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	
+
 	log.Printf("[DF] Append: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
 	defer func() {
 		// Release lock
@@ -806,8 +806,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 		return nil, fmt.Errorf("file does not exist")
 	}
 
-
-	// Use the meta retrived after meta is locked. 
+	// Use the meta retrived after meta is locked.
 	// This ensures we have the most up-to-date file size
 	log.Printf("[DF] Append: read data from local source file %s", fileSource)
 	log.Printf("[DF] Append: appending %d bytes from %s", len(data), fileSource)
@@ -826,7 +825,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	startPos := 0 // Position in data[] where new blocks start (after filling last block if needed)
 
 	log.Printf("[DF] Append: residual=%d, lastBlock=%d, dataLen=%d", residual, lastBlock, len(data))
-	
+
 	if residual != 0 {
 		// Calculate how much data to fill into the last block
 		startPos = min(files.BLOCK_SIZE-residual, len(data))
@@ -851,7 +850,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 				time.Sleep(50 * time.Millisecond)
 				continue
 			}
-			
+
 			// Use the actual block length (might be different from residual if another append completed)
 			actualResidual := len(pack.Data)
 			if actualResidual != residual {
@@ -955,7 +954,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 	return nil, fmt.Errorf("failed reach quorum, expecting %d, but got %d", quorum, successCount)
 }
 
-func (d *DistributedFiles) Merge(_ int, reply *int) error {
+func (d *DistributedFiles) Merge(_ int, _ *bool) error {
 	// Loop through local files and redistribute them
 	metas := d.FileManager.GetMetas()
 	for id := range metas {
@@ -979,6 +978,51 @@ func (d *DistributedFiles) Merge(_ int, reply *int) error {
 			d.lockBlockJobMap.Lock()
 			d.BlockJobMap[id] = true
 			d.lockBlockJobMap.Unlock()
+		}
+	}
+	return nil
+}
+
+func (d *DistributedFiles) MergeFile(filename string, _ *bool) error {
+	// Check if the file is here
+	metaId := files.GetIdFromFilename(filename)
+	meta, err := d.getRemoteMeta(metaId, d.NumOfReplicas/2+1)
+	if err != nil {
+		return fmt.Errorf("can't read meta of %s", filename)
+	}
+	if meta.Counter == 0 {
+		return fmt.Errorf("file does not exist")
+	}
+
+
+	localMeta := new(files.Meta)
+	d.FileManager.ReadMeta(metaId, localMeta)
+	if localMeta.Counter > 0 { // We have this meta, add to merge job
+		d.lockMetaJobMap.RLock()
+		_, ok := d.MetaJobMap[metaId]
+		d.lockMetaJobMap.RUnlock()
+		if !ok {
+			d.MetaJobs.Push(metaId) // Add local meta to merge job
+			d.lockMetaJobMap.Lock()
+			d.MetaJobMap[metaId] = true
+			d.lockMetaJobMap.Unlock()
+		}
+	}
+
+	for i := 0; i < meta.FileBlocks; i++ {
+		blockInfo, _ := meta.GetBlock(i)
+		localInfo := new(files.BlockInfo)
+		d.FileManager.ReadBlockInfo(blockInfo.Id, localInfo)
+		if localInfo.Counter > 0 { // We have this block, add to merge job
+			d.lockBlockJobMap.RLock()
+			_, ok := d.BlockJobMap[blockInfo.Id]
+			d.lockBlockJobMap.RUnlock()
+			if !ok {
+				d.BlockJobs.Push(blockInfo.Id) // Add local block to merge job
+				d.lockBlockJobMap.Lock()
+				d.BlockJobMap[blockInfo.Id] = true
+				d.lockBlockJobMap.Unlock()
+			}
 		}
 	}
 	return nil
@@ -1016,17 +1060,16 @@ func (d *DistributedFiles) CollectMeta() map[uint64]files.Meta {
 }
 
 func (d *DistributedFiles) ListReplicas(filename string, quorum int) string {
-    fileId := files.GetIdFromFilename(filename)
-    
-    result := fmt.Sprintf("FileName: %s, FileID: %d\n", filename, fileId)
-    
-    
-    // Get replicas for metadata
-    replicas, err := d.Membership.GetReplicas(fileId, d.NumOfReplicas)
-    if err != nil {
-        result += fmt.Sprintf("Failed to get replicas for metadata: %s\n", err.Error())
-        return result
-    }
+	fileId := files.GetIdFromFilename(filename)
+
+	result := fmt.Sprintf("FileName: %s, FileID: %d\n", filename, fileId)
+
+	// Get replicas for metadata
+	replicas, err := d.Membership.GetReplicas(fileId, d.NumOfReplicas)
+	if err != nil {
+		result += fmt.Sprintf("Failed to get replicas for metadata: %s\n", err.Error())
+		return result
+	}
 
 	meta, err := d.getRemoteMeta(fileId, quorum)
 	if err != nil {
@@ -1038,13 +1081,12 @@ func (d *DistributedFiles) ListReplicas(filename string, quorum int) string {
 	for _, replica := range replicas {
 		// Read Metadata
 		reply := new(files.Meta)
-		err := d.RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port + 1, fileId, reply)
+		err := d.RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port+1, fileId, reply)
 		if err == nil {
 			result += fmt.Sprintf("%s\n", replica.String())
 		}
 	}
 
-	
 	// Get replicas for blocks
 	for i := 0; i < meta.FileBlocks; i++ {
 		result += fmt.Sprintf("Block %d:\n", i)
@@ -1056,16 +1098,73 @@ func (d *DistributedFiles) ListReplicas(filename string, quorum int) string {
 		}
 		for _, replica := range replicas {
 			reply := new(files.BlockInfo)
-			err := d.RemoteCall("FileManager.ReadBlockInfo", replica.Hostname, replica.Port + 1, blockInfo.Id, reply)
+			err := d.RemoteCall("FileManager.ReadBlockInfo", replica.Hostname, replica.Port+1, blockInfo.Id, reply)
 			if err == nil {
 				result += fmt.Sprintf("%s\n", replica.String())
 			}
 		}
 	}
 
-    return result
+	return result
 }
 
 func (d *DistributedFiles) Stop() {
 	d.State = Stop
+}
+
+// Extra function and data type for experiment
+func (d *DistributedFiles) CheckMergeComplete(filename string, reply *bool) error {
+	fileId := files.GetIdFromFilename(filename)
+
+	// Get replicas for metadata
+	replicas, err := d.Membership.GetReplicas(fileId, d.NumOfReplicas)
+	if err != nil {
+		return fmt.Errorf("failed to get replicas for metadata: %s", err.Error())
+	}
+
+	meta, err := d.getRemoteMeta(fileId, 2)
+	if err != nil {
+		return fmt.Errorf("failed to get metadata for %s: %s", filename, err.Error())
+	}
+	
+	for _, replica := range replicas {
+		// Read Metadata
+		remoteMeta := new(files.Meta)
+		err := d.RemoteCall("FileManager.ReadMeta", replica.Hostname, replica.Port+1, fileId, remoteMeta)
+		if err != nil {
+			*reply = false
+			// return fmt.Errorf("failed to read meta for %s at %s:%d: %s", filename, replica.Hostname, replica.Port, err.Error())
+			return nil
+		}
+		if remoteMeta.Counter < meta.Counter {
+			*reply = false
+			return nil
+			// return fmt.Errorf("metadata counter of %s is not up to date at %s:%d", filename, replica.Hostname, replica.Port)
+		}
+	}
+
+	// Get replicas for blocks
+	for i := 0; i < meta.FileBlocks; i++ {
+		blockInfo, _ := meta.GetBlock(i)
+		replicas, err := d.Membership.GetReplicas(blockInfo.Id, d.NumOfReplicas)
+		if err != nil {
+			return fmt.Errorf("failed to get replicas for block %d of %s: %s", i, filename, err.Error())
+		}
+		for _, replica := range replicas {
+			remoteBlock := new(files.BlockInfo)
+			err := d.RemoteCall("FileManager.ReadBlockInfo", replica.Hostname, replica.Port+1, blockInfo.Id, remoteBlock)
+			if err != nil {
+				*reply = false 
+				return nil
+				// return fmt.Errorf("failed to read block-%d for %s at %s:%d: %s", i, filename, replica.Hostname, replica.Port, err.Error())
+			}
+			if remoteBlock.Counter < meta.Counter {
+				*reply = false 
+				// return fmt.Errorf("block %d of %s is not up to date at %s:%d", i, filename, replica.Hostname, replica.Port)
+				return nil
+			}
+		}
+	}
+	*reply = true
+	return nil
 }
