@@ -183,10 +183,14 @@ func (m *Menu) Display() (string, uint64, error) {
 			m.OptionCursor = (m.OptionCursor + 1) % len(m.Options)
 
 		case KeyUp:
-			m.TableCursor = (m.TableCursor + numDataRows - 1) % numDataRows
-
+			if numDataRows > 0 {
+				m.TableCursor = (m.TableCursor + numDataRows - 1) % numDataRows
+			}
+			
 		case KeyDown:
-			m.TableCursor = (m.TableCursor + 1) % numDataRows
+			if numDataRows > 0 {
+				m.TableCursor = (m.TableCursor + 1) % numDataRows
+			}
 
 		case KeyEnter: // selection
 			if m.SelectTable {
