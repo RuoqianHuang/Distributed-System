@@ -42,6 +42,10 @@ func (s *Server) CLI(args Args, reply *string) error {
 		infoMap := s.failureDetector.Membership.GetInfoMap()
 		table, _ := member.CreateTable(infoMap)
 		*reply = "\n" + table
+	case "list_mem_ids":
+		infoMap := s.failureDetector.Membership.GetInfoMap()
+		table, _ := member.CreateTableSortedById(infoMap)
+		*reply = "\n" + table
 	case "status":
 		infoMap := s.failureDetector.Membership.GetInfoMap()
 		table, _ := member.CreateTable(infoMap)

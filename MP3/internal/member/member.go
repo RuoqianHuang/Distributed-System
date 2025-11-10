@@ -474,3 +474,176 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 	res = res + strings.Repeat("-", totalLength) + "\n"
 	return res, sortedId
 }
+
+
+func CreateTableSortedById(infoMap map[uint64]Info) (string, []uint64) {
+	type Pair struct {
+		Id       uint64
+		Hostname string
+		Port     int
+	}
+	infoList := make([]Pair, 0, 16)
+	for id, info := range infoMap {
+		infoList = append(infoList, Pair{
+			Id:       id,
+			Hostname: info.Hostname,
+			Port:     info.Port,
+		})
+	}
+	sort.Slice(infoList, func(i, j int) bool {
+		return infoList[i].Id < infoList[j].Id
+	})
+	sortedId := make([]uint64, 0, len(infoList))
+	for _, pair := range infoList {
+		sortedId = append(sortedId, pair.Id)
+	}
+	// --------------------------------------------------------------------
+	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
+	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
+	// --------------------------------------------------------------------
+	maxLengths := map[string]int{
+		"Id":        2,
+		"Hostname":  8,
+		"Port":      4,
+		"Version":   7,
+		"Timestamp": 9,
+		"Counter":   7,
+		"State":     5,
+	}
+	for _, i := range infoList {
+		info := infoMap[i.Id]
+		lengths := map[string]int{
+			"Id":        len(fmt.Sprintf("%d", i.Id)),
+			"Hostname":  len(i.Hostname),
+			"Port":      len(fmt.Sprintf("%d", i.Port)),
+			"Version":   len(info.Version.Format(time.RFC3339Nano)),
+			"Timestamp": len(info.Timestamp.Format(time.RFC3339Nano)),
+			"Counter":   len(fmt.Sprintf("%d", info.Counter)),
+			"State":     len(stateName[info.State]),
+		}
+		for key, value := range lengths {
+			if maxLengths[key] < value {
+				maxLengths[key] = value
+			}
+		}
+	}
+	totalLength := 22
+	for _, v := range maxLengths {
+		totalLength = totalLength + v
+	}
+
+	res := strings.Repeat("-", totalLength) + "\n"
+
+	// Add column headers
+	header := "| "
+
+	// ID header
+	s := "ID"
+	if len(s) < maxLengths["Id"] {
+		s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Hostname header
+	s = "Hostname"
+	if len(s) < maxLengths["Hostname"] {
+		s = s + strings.Repeat(" ", maxLengths["Hostname"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Port header
+	s = "Port"
+	if len(s) < maxLengths["Port"] {
+		s = s + strings.Repeat(" ", maxLengths["Port"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Version header
+	s = "Version"
+	if len(s) < maxLengths["Version"] {
+		s = s + strings.Repeat(" ", maxLengths["Version"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Timestamp header
+	s = "Timestamp"
+	if len(s) < maxLengths["Timestamp"] {
+		s = s + strings.Repeat(" ", maxLengths["Timestamp"]-len(s))
+	}
+	header = header + s + " | "
+
+	// Counter header
+	s = "Counter"
+	if len(s) < maxLengths["Counter"] {
+		s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
+	}
+	header = header + s + " | "
+
+	// State header
+	s = "State"
+	if len(s) < maxLengths["State"] {
+		s = s + strings.Repeat(" ", maxLengths["State"]-len(s))
+	}
+	header = header + s + " |"
+
+	res = res + header + "\n"
+	res = res + strings.Repeat("-", totalLength) + "\n"
+
+	for _, i := range infoList {
+		info := infoMap[i.Id]
+		line := "| "
+
+		// Id
+		s := fmt.Sprintf("%d", i.Id)
+		if len(s) < maxLengths["Id"] {
+			s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Hostname
+		s = i.Hostname
+		if len(s) < maxLengths["Hostname"] {
+			s = s + strings.Repeat(" ", maxLengths["Hostname"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Port
+		s = fmt.Sprintf("%d", i.Port)
+		if len(s) < maxLengths["Port"] {
+			s = s + strings.Repeat(" ", maxLengths["Port"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Version
+		s = info.Version.Format(time.RFC3339Nano)
+		if len(s) < maxLengths["Version"] {
+			s = s + strings.Repeat(" ", maxLengths["Version"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Timestamp
+		s = info.Timestamp.Format(time.RFC3339Nano)
+		if len(s) < maxLengths["Timestamp"] {
+			s = s + strings.Repeat(" ", maxLengths["Timestamp"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Counter
+		s = fmt.Sprintf("%d", info.Counter)
+		if len(s) < maxLengths["Counter"] {
+			s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
+		}
+		line = line + s + " | "
+
+		// State
+		s = stateName[info.State]
+		if len(s) < maxLengths["State"] {
+			s = s + strings.Repeat(" ", maxLengths["State"]-len(s))
+		}
+		line = line + s + " |"
+
+		res = res + line + "\n"
+	}
+	res = res + strings.Repeat("-", totalLength) + "\n"
+	return res, sortedId
+}
