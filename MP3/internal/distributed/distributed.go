@@ -1076,6 +1076,10 @@ func (d *DistributedFiles) ListReplicas(filename string, quorum int) string {
 		result += fmt.Sprintf("Failed to get metadata for %s: %s", filename, err.Error())
 		return result
 	}
+	if meta.Counter == 0 {
+		result += fmt.Sprintf("Error: %s does not exist!", filename)
+		return result
+	}
 
 	result += "Metadata:\n"
 	for _, replica := range replicas {
