@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cs425/mp3/internal/files"
 	"fmt"
 	"log"
 	"net"
@@ -25,15 +26,15 @@ type Args struct {
 }
 
 func CallWithTimeout(
+	funcName string,
 	hostname string,
 	port int,
-	args Args,
-	result *string) {
+	args any,
+	result any) error {
 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
 	if err != nil {
-		log.Printf("Failed to dial server %s:%d: %s\n", hostname, port, err.Error())
-		return
+		return fmt.Errorf("failed to dial server %s:%d: %s", hostname, port, err.Error())
 	}
 	defer conn.Close()
 
@@ -41,12 +42,13 @@ func CallWithTimeout(
 	callChan := make(chan error, 1)
 
 	go func() {
-		callChan <- client.Call("Server.CLI", args, result)
+		callChan <- client.Call(funcName, args, result)
 	}()
 	err = <-callChan
 	if err != nil {
-		log.Printf("RPC call to server %s:%d failed: %s\n", hostname, port, err.Error())
+		return fmt.Errorf("rpc call to server %s:%d failed: %s", hostname, port, err.Error())
 	}
+	return nil
 }
 
 func main() {
@@ -96,23 +98,43 @@ func main() {
 		}
 		args.FileSource = FileSource
 	} 
-	if args.Command == "ls" {
+	if args.Command == "ls" || args.Command == "merge" {
 		if len(otherArgs) < 2 {
 			log.Fatal("Please specify file name for ls command")
 		}
 		args.Filename = otherArgs[1]
 	}
 	if args.Command == "getfromreplica" {
-		if len(otherArgs) < 4 {
-			log.Fatal("Usage: getfromreplica VMaddress HyDFSfilename localfilename")
+		if len(otherArgs) < 5 {
+			log.Fatal("Usage: getfromreplica VMaddress HyDFSfilename blockNumber localfilename")
 		}
-		args.VMAddress = otherArgs[1]
-		args.Filename = otherArgs[2]
-		FileSource, err := filepath.Abs(otherArgs[3])
+		VMAddress := otherArgs[1]
+		filename := otherArgs[2]
+		blockNumber, err := strconv.Atoi(otherArgs[3])
 		if err != nil {
-			log.Fatalf("Can't resolve file path: %s: %s", otherArgs[3], err.Error())
+			log.Fatalf("Failed to parse block number: %s", otherArgs[3])
 		}
-		args.FileSource = FileSource
+		localFile, err := filepath.Abs(otherArgs[4])
+		if err != nil {
+			log.Fatalf("Can't resolve file path: %s: %s", otherArgs[4], err.Error())
+		}
+		fakeMeta := files.CreateMeta(filename, uint64(files.BLOCK_SIZE * (blockNumber + 1)))
+		blockInfo, _ := fakeMeta.GetBlock(blockNumber)
+
+		reply := new(files.BlockPackage)
+		err = CallWithTimeout("FileManager.ReadBlock", VMAddress, port, blockInfo.Id, reply)
+		if err != nil {
+			log.Fatalf("%s", err.Error())
+		}
+		if reply.BlockInfo.Counter == 0 {
+			log.Fatalf("Can't get file block from %s", VMAddress)
+		}
+
+		err = os.WriteFile(localFile, reply.Data, 0644)
+		if err != nil {
+			log.Fatalf("Failed to write file to %s: %s", localFile, err.Error())
+		}
+		return
 	}
 
 	if args.Command == "multiappend" {
@@ -155,7 +177,7 @@ func main() {
 
 				vmPort := 8788 // Default RPC port
 				
-				CallWithTimeout(vm, vmPort, vmArgs, result)
+				CallWithTimeout("Server.CLI", vm, vmPort, vmArgs, result)
 				results[idx] = fmt.Sprintf("VM %s: %s", vm, *result)
 			}(i, pair.VM, pair.LocalFile)
 		}
@@ -169,7 +191,10 @@ func main() {
 	}
 
 	result := new(string)
-	CallWithTimeout(hostname, port, args, result)
+	err := CallWithTimeout("Server.CLI", hostname, port, args, result)
+	if err != nil {
+		log.Fatalf("%s", err.Error())
+	}
 
 	log.Printf("\n%s", *result)
 

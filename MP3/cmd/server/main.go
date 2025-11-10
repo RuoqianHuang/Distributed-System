@@ -89,8 +89,13 @@ func (s *Server) CLI(args Args, reply *string) error {
 			}
 			*reply = fmt.Sprintf("%s append successfully! Replicated to: %s", args.Filename, replicaList)
 		}
-	case "getfromreplica":
-		*reply = "Not implemented, please refer to the interactive client"
+	case "merge":
+		dummy := new(bool)
+		infoMap := s.distributed.Membership.GetInfoMap()
+		for _, replica := range infoMap {
+			s.distributed.RemoteCall("DistributedFiles.MergeFile", replica.Hostname, replica.Port + 1, args.Filename, dummy)
+		}
+		*reply = fmt.Sprintf("%s add to merge queue", args.Filename)
 	case "flow":
 		flow := new(float64)
 		s.GetFlow(0, flow)
