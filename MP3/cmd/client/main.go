@@ -189,6 +189,30 @@ func main() {
 		}
 		return
 	}
+	if args.Command == "liststore" {
+		if len(otherArgs) < 2 {
+			log.Fatal("Usage: liststore VMaddress")
+		}
+		VMAddress := otherArgs[1]
+		metaMap := new(map[uint64]files.Meta)
+		log.Printf("Fetching metadata from %s", VMAddress)
+		err := CallWithTimeout("Server.Files", VMAddress, 8788, 0, metaMap)
+		if err != nil {
+			log.Fatalf("Failed to get metadata from %s: %s", VMAddress, err.Error())
+		}
+		table, _ := files.CreateTable(*metaMap)
+		log.Printf("Metadata at %s:\n%s", VMAddress, table)
+
+		blockMap := new(map[uint64]files.BlockInfo)
+		log.Printf("Fetching blocks from %s", VMAddress)
+		err = CallWithTimeout("Server.Blocks", VMAddress, 8788, 0, blockMap)
+		if err != nil {
+			log.Fatalf("Failed to get blocks from %s: %s", VMAddress, err.Error())
+		}
+		table, _ = files.CreateBlockTable(*blockMap)
+		log.Printf("Blocks at %s:\n%s", VMAddress, table)
+		return
+	}
 
 	result := new(string)
 	err := CallWithTimeout("Server.CLI", hostname, port, args, result)

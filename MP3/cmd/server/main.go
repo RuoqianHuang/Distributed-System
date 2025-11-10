@@ -115,6 +115,11 @@ func (s *Server) Files(_ int, reply *map[uint64]files.Meta) error {
 	return nil
 }
 
+func (s *Server) Blocks(_ int, reply *map[uint64]files.BlockInfo) error {
+	*reply = s.distributed.FileManager.GetBlocks()
+	return nil
+}
+
 func (s *Server) Member(_ int, reply *map[uint64]member.Info) error {
 	*reply = s.distributed.Membership.GetInfoMap()
 	return nil
