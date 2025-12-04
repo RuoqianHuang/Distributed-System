@@ -1,7 +1,7 @@
 # Makefile for Operator Executables
 # Builds all operator executables and installs them to /cs425/mp4/
 
-OPERATORS = grep_op replace_op count_op
+OPERATORS = grep_op replace_op count_op count_by_column_op extract_fields_op
 INSTALL_DIR = /cs425/mp4
 
 .PHONY: all clean install test
@@ -16,6 +16,12 @@ replace_op: replace_op.go
 
 count_op: count_op.go
 	go build -o count_op count_op.go
+
+count_by_column_op: count_by_column_op.go
+	go build -o count_by_column_op count_by_column_op.go
+
+extract_fields_op: extract_fields_op.go
+	go build -o extract_fields_op extract_fields_op.go
 
 install: all
 	@echo "Installing operators to $(INSTALL_DIR)..."
