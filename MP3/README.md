@@ -12,8 +12,6 @@ go build -o bin/interactive ./cmd/interactive
 
 # Build the server
 go build -o bin/server ./cmd/server
-
-
 ````
 ## Deploy guide
 This project uses Ansible for automated deployment and management via ``systemd`` services.
