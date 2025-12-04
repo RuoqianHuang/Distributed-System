@@ -1172,3 +1172,304 @@ func (d *DistributedFiles) CheckMergeComplete(filename string, reply *bool) erro
 	*reply = true
 	return nil
 }
+
+// Function for direct append and create
+func (d *DistributedFiles) CreateEmpty(filename string, _ *bool) error {
+	metaId := files.GetIdFromFilename(filename)
+	quorum := 2
+
+	// Lock the meta, so that no other process can write to this file
+	// Use the first replica as coordinator
+	replicas, err := d.Membership.GetReplicas(metaId, d.NumOfReplicas)
+	if err != nil {
+		return fmt.Errorf("failed to get replicas: %s", err.Error())
+	}
+
+	// Try to accquire lock for 1s
+	startTime := time.Now()
+	for {
+		result := new(bool)
+		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
+		if err == nil {
+			break
+		}
+		if time.Since(startTime) > time.Second {
+			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	defer func() {
+		// Release lock
+		for i := 0; i < d.NumOfTries; i++ { // Try
+			result := new(bool)
+			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
+			if err == nil {
+				log.Printf("[DF] lock for %s released", filename)
+				break
+			}
+		}
+	}()
+	log.Printf("[DF] Create: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
+
+	// Check file exist
+	meta, err := d.getRemoteMeta(metaId, quorum) 
+	if err != nil {
+		return fmt.Errorf("failed to read remote meta: %s", err.Error())
+	}
+	if meta.Counter > 0 {
+		return fmt.Errorf("file already exist")
+	}
+
+	meta = files.CreateMeta(filename, uint64(0))
+	log.Printf("[DF] Cteate: start create empty file: %s", filename)
+
+	// Send blocks
+	tries := make([]int, meta.FileBlocks)
+	success := make([]int, meta.FileBlocks)
+	for t := 0; t < d.NumOfTries; t++ {
+		for i := 0; i < meta.FileBlocks; i++ {
+			if success[i] > 0 {
+				continue
+			}
+			blockInfo, err := meta.GetBlock(i)
+			if err != nil {
+				tries[i]++
+				if tries[i] >= d.NumOfTries {
+					return fmt.Errorf("failed to send block %d for %d times, abort", i, tries[i])
+				}
+			}
+			blockPack := files.BlockPackage{
+				BlockInfo: blockInfo,
+				Data:      []byte{},
+			}
+			err = d.sendBufferedBlocks(blockPack, quorum)
+			if err != nil {
+				tries[i]++
+			if tries[i] >= d.NumOfTries {
+				return fmt.Errorf("failed to send block %d for %d times: %s, abort", i, tries[i], err.Error())
+			}
+			} else {
+				log.Printf("[DF] Block %d of %s sent successfully", i, filename)
+				success[i] = 1
+			}
+		}
+	}
+
+	// Once all blocks are buffered, we can increase the counter, then all other process will commit the buffered block
+	successCount := 0
+	success = make([]int, d.NumOfReplicas)
+	for i := 0; i < d.NumOfTries; i++ { // Try
+		for j, replica := range replicas {
+			if success[j] > 0 {
+				continue
+			}
+			success[j] = d.sendMeta(replica.Hostname, replica.Port+1, meta)
+			if success[j] > 0 {
+				successCount++
+				log.Printf("[DF] Increase file counter at %s:%d of %s successfully", replica.Hostname, replica.Port, filename)
+			}
+		}
+	}
+	if successCount >= quorum {
+		return nil
+	}
+	return fmt.Errorf("failed reach quorum, expecting %d, but got %d", quorum, successCount)
+}
+
+
+type AppendPack struct {
+	filename 	string
+	data        []byte
+}
+
+func (d *DistributedFiles) AppendBytes(info AppendPack, _ *bool) error {
+	
+	quorum := 2
+	data := info.data
+	filename := info.filename
+
+	if len(data) == 0 {
+		return fmt.Errorf("nothing to append to %s", filename)
+	}
+
+	metaId := files.GetIdFromFilename(filename)
+	// Lock the meta, so that no other process can write to this file
+	// Use the first replica as coordinator
+	replicas, err := d.Membership.GetReplicas(metaId, d.NumOfReplicas)
+	if err != nil {
+		return fmt.Errorf("failed to get replicas: %s", err.Error())
+	}
+	// Try to accquire lock for 1s
+	startTime := time.Now()
+	for {
+		result := new(bool)
+		err = d.RemoteCall("DistributedFiles.GetLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
+		if err == nil {
+			break
+		}
+		if time.Since(startTime) > time.Second {
+			return fmt.Errorf("failed to acquire lock of %s from %s:%d: %s", filename, replicas[0].Hostname, replicas[0].Port, err.Error())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	log.Printf("[DF] Append: accquired lock for file %s from %s:%d", filename, replicas[0].Hostname, replicas[0].Port)
+	defer func() {
+		// Release lock
+		for i := 0; i < d.NumOfTries; i++ { // Try
+			result := new(bool)
+			err = d.RemoteCall("DistributedFiles.ReleaseLock", replicas[0].Hostname, replicas[0].Port+1, metaId, result)
+			if err == nil {
+				log.Printf("[DF] lock for %s released", filename)
+				break
+			}
+		}
+	}()
+
+	meta, err := d.getRemoteMeta(metaId, quorum)
+	if err != nil {
+		return fmt.Errorf("failed to read remote meta: %s", err.Error())
+	}
+	if meta.Counter == 0 {
+		return fmt.Errorf("file does not exist")
+	}
+
+	// Use the meta retrived after meta is locked.
+	// This ensures we have the most up-to-date file size
+	log.Printf("[DF] Append: appending %d bytes", len(data))
+	newSize := meta.FileSize + uint64(len(data))
+	newMeta := files.Meta{
+		Id:         meta.Id,
+		FileName:   meta.FileName,
+		FileSize:   newSize,
+		Counter:    meta.Counter + 1,
+		FileBlocks: int((newSize-1)/files.BLOCK_SIZE + 1),
+	}
+	log.Printf("[DF] Append: new file info filename: %s, file size: %d bytes, num of blocks: %d", filename, newSize, newMeta.FileBlocks)
+
+	residual := int(meta.FileSize % files.BLOCK_SIZE)
+	lastBlock := meta.FileBlocks - 1
+	startPos := 0 // Position in data[] where new blocks start (after filling last block if needed)
+
+	log.Printf("[DF] Append: residual=%d, lastBlock=%d, dataLen=%d", residual, lastBlock, len(data))
+
+	if residual != 0 {
+		// Calculate how much data to fill into the last block
+		startPos = min(files.BLOCK_SIZE-residual, len(data))
+		log.Printf("[DF] Append: filling last block %d with %d bytes (residual space: %d)", lastBlock, startPos, files.BLOCK_SIZE-residual)
+		// We need to get the last block and update it
+		success := false
+		blockPack := files.BlockPackage{}
+		lastBlockInfo, _ := newMeta.GetBlock(lastBlock)
+		log.Printf("[DF] Append: reading last block %d (id=%d, expected residual=%d)", lastBlock, lastBlockInfo.Id, residual)
+		
+		// try to get the latest block for 1s
+		startTime := time.Now()
+		for {
+			if time.Since(startTime) > time.Second {
+				break
+			}
+			pack, err := d.getRemoteBlock(lastBlockInfo.Id, quorum)
+			if err != nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			} else if pack.BlockInfo.Counter < meta.Counter {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+
+			// Use the actual block length (might be different from residual if another append completed)
+			actualResidual := len(pack.Data)
+			if actualResidual != residual {
+				log.Printf("[DF] Append: WARNING - last block %d has length %d, expected %d (residual). Another append may have completed.", lastBlock, actualResidual, residual)
+				// Recalculate startPos based on actual residual
+				startPos = min(files.BLOCK_SIZE-actualResidual, len(data))
+				log.Printf("[DF] Append: adjusted startPos to %d based on actual residual %d", startPos, actualResidual)
+			}
+			log.Printf("[DF] Append: read last block %d: length=%d, appending %d bytes", lastBlock, actualResidual, startPos)
+			blockPack = files.BlockPackage{
+				BlockInfo: lastBlockInfo,
+				Data:      append(pack.Data, data[:startPos]...),
+			}
+			log.Printf("[DF] Append: updated last block %d: new length=%d", lastBlock, len(blockPack.Data))
+			success = true
+			break
+		}
+		if !success {
+			return fmt.Errorf("failed to get block %d after trying for 1s", lastBlock)
+		}
+
+		success = false
+		for t := 0; t < d.NumOfTries; t++ {
+			err = d.sendBufferedBlocks(blockPack, quorum)
+			if err != nil {
+				continue
+			}
+			success = true
+			break
+		}
+		if !success {
+			return fmt.Errorf("failed to send new block to replica after %d tries", d.NumOfTries)
+		}
+		log.Printf("[DF] Append: block %s-%d updated", filename, lastBlock)
+	}
+
+	if lastBlock+1 < newMeta.FileBlocks {
+		// We have new blocks to update
+		blocksToUpdate := newMeta.FileBlocks - lastBlock - 1
+		log.Printf("[DF] Append: creating %d new blocks starting from position %d in data", blocksToUpdate, startPos)
+		tries := make([]int, blocksToUpdate)
+		success := make([]int, blocksToUpdate)
+		for t := 0; t < d.NumOfTries; t++ {
+			for i := 0; i < blocksToUpdate; i++ {
+				if success[i] > 0 {
+					continue
+				}
+				blockInfo, err := newMeta.GetBlock(lastBlock + i + 1)
+				if err != nil {
+					tries[i]++
+					if tries[i] >= d.NumOfTries {
+						return fmt.Errorf("failed to send block %d for %d times: %s, abort", i+lastBlock+1, tries[i], err.Error())
+					}
+				}
+				l := startPos + i*files.BLOCK_SIZE
+				r := min(l+files.BLOCK_SIZE, len(data))
+				log.Printf("[DF] Append: sending new block %d: data[%d:%d] (%d bytes)", lastBlock+i+1, l, r, r-l)
+				blockPack := files.BlockPackage{
+					BlockInfo: blockInfo,
+					Data:      data[l:r],
+				}
+				err = d.sendBufferedBlocks(blockPack, quorum)
+				if err != nil {
+					tries[i]++
+					if tries[i] >= d.NumOfTries {
+						return fmt.Errorf("failed to send block %d for %d times: %s, abort", i+lastBlock+1, tries[i], err.Error())
+					}
+				} else {
+					log.Printf("[DF] Block %d of %s sent successfully", i+lastBlock+1, filename)
+					success[i] = 1
+				}
+			}
+		}
+	}
+
+	// Once all blocks are buffered, we can increase the counter, then all other process will commit the buffered block
+	successCount := 0
+	success := make([]int, d.NumOfReplicas)
+	for i := 0; i < d.NumOfTries; i++ { // Try
+		for j, replica := range replicas {
+			if success[j] > 0 {
+				continue
+			}
+			success[j] = d.sendMeta(replica.Hostname, replica.Port+1, newMeta)
+			if success[j] > 0 {
+				successCount++
+				log.Printf("[DF] Increase file counter at %s:%d of %s successfully", replica.Hostname, replica.Port, filename)
+			}
+		}
+	}
+	if successCount >= quorum {
+		return nil
+	}
+	return fmt.Errorf("failed reach quorum, expecting %d, but got %d", quorum, successCount)
+}

@@ -176,8 +176,9 @@ func main() {
 				result := new(string)
 
 				vmPort := 8788 // Default RPC port
-				
+				log.Printf("Start append %s at %s", vm, args.Filename)
 				CallWithTimeout("Server.CLI", vm, vmPort, vmArgs, result)
+				log.Printf("Done append %s at %s", vm, args.Filename)
 				results[idx] = fmt.Sprintf("VM %s: %s", vm, *result)
 			}(i, pair.VM, pair.LocalFile)
 		}

@@ -229,7 +229,11 @@ func main() {
 				result := new(string)
 				appendHost := utils.HOSTS[j]
 				appendPort := 8788
-				CallWithTimeout("Server.CLI", appendHost, appendPort, args, result)
+				err := CallWithTimeout("Server.CLI", appendHost, appendPort, args, result)
+				if err != nil {
+					log.Fatalf("%s", err.Error())
+				} 
+				log.Print(*result)
 				results[idx] = fmt.Sprintf("Host %s: %s", appendHost, *result)
 			}(j)
 		}
