@@ -2,173 +2,200 @@ package stream
 
 import (
 	"bufio"
-	"cs425/mp4/internal/flow"
+	"bytes"
 	"cs425/mp4/internal/detector"
-	"hash/fnv"
+	"cs425/mp4/internal/flow"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"net"
 	"net/rpc"
-	"os/exec"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	CONNECTION_TIMEOUT = 1 * time.Second
-	CALL_TIMEOUT       = 1 * time.Second
+	CONNECTION_TIMEOUT = 2 * time.Second
+	CALL_TIMEOUT       = 2 * time.Second
 	HYDFS_PORT         = 8788
 )
 
 
 type Tuple struct {
-	ID		  	string
-	Key 	  	string
-	Value 	   	string
-	SourceHost  string
-	SourcePort  int
+	ID		  	   string
+	Key 	  	   string
+	Value 	   	   string
+	SourceHost     string
+	SourceRPCPort  int
 }
 
 
 // HyDFS Append RPC Argument Structure
 type AppendPack struct {
-	Filename string
-	Data     []byte
-} 
+	Filename 	string
+	Data        []byte
+}
 
 // OperatorRunner manages the external task process
 type OperatorRunner struct {
-    cmd     *exec.Cmd
-    stdin   io.WriteCloser
-    stdout  *bufio.Scanner
-    exeName string
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	stdout    *bufio.Scanner
+	stderr    *bytes.Buffer // Capture error logs from Python
+	stderrMu  sync.Mutex    // Safety for reading stderr while writing
+	exePath   string
 }
 
-// NewOperatorRunner starts the external process at /cs425/mp4/<exeName>
-// args: command line arguments (e.g., grep pattern)
-func NewOperatorRunner(exeName string, args string) (*OperatorRunner, error) {
-    // 1. Construct full path
-    fullPath := fmt.Sprintf("/cs425/mp4/%s", exeName)
+// NewOperatorRunner starts the external process
+func NewOperatorRunner(exePath string, args string) (*OperatorRunner, error) {
+	// Prepare Command
+	var cmd *exec.Cmd
+	if args != "" {
+		// Note: simplified splitting. For complex args, consider a better parser.
+		// For this demo, we assume single argument string usually.
+		cmd = exec.Command(exePath, args)
+	} else {
+		cmd = exec.Command(exePath)
+	}
 
-    // 2. Prepare Command
-    var cmd *exec.Cmd
-    if args != "" {
-        // If args exist, pass them. 
-        // Note: If args are complex (e.g. multiple flags), 
-        // you might need strings.Split(args, " ")
-        cmd = exec.Command(fullPath, args)
-    } else {
-        cmd = exec.Command(fullPath)
-    }
+	// 1. Pipe Stdin
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdin pipe: %v", err)
+	}
 
-    // 3. Create Pipes
-    stdin, err := cmd.StdinPipe()
-    if err != nil {
-        return nil, fmt.Errorf("failed to create stdin pipe: %v", err)
-    }
+	// 2. Pipe Stdout
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %v", err)
+	}
 
-    stdoutPipe, err := cmd.StdoutPipe()
-    if err != nil {
-        return nil, fmt.Errorf("failed to create stdout pipe: %v", err)
-    }
+	// 3. Pipe Stderr
+	// We capture stderr to a buffer so we can print it if the task crashes
+	stderrBuf := &bytes.Buffer{}
+	cmd.Stderr = stderrBuf
 
-    // 4. Start the Process
-    if err := cmd.Start(); err != nil {
-        return nil, fmt.Errorf("failed to start command %s: %v", fullPath, err)
-    }
+	// 4. Start the Process
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start command %s: %v", exePath, err)
+	}
+	log.Printf("Runner on %s created", exePath)
 
-    return &OperatorRunner{
-        cmd:     cmd,
-        stdin:   stdin,
-        stdout:  bufio.NewScanner(stdoutPipe),
-        exeName: exeName,
-    }, nil
+	return &OperatorRunner{
+		cmd:     cmd,
+		stdin:   stdin,
+		stdout:  bufio.NewScanner(stdoutPipe),
+		stderr:  stderrBuf,
+		exePath: exePath,
+	}, nil
 }
 
+// Helper to read fields like "key: ..."
 func (r *OperatorRunner) readField(prefix string) (string, error) {
 	if r.stdout.Scan() {
 		line := r.stdout.Text()
 		if strings.HasPrefix(line, prefix) {
 			return strings.TrimPrefix(line, prefix), nil
 		}
+		return "", fmt.Errorf("protocol mismatch: expected prefix '%s', got '%s'", prefix, line)
 	}
-	return "", fmt.Errorf("fail to read field from operator") 
+	// If scan fails, return the error + stderr content
+	return "", r.scanError()
+}
+
+// Helper to construct a detailed error message including stderr
+func (r *OperatorRunner) scanError() error {
+	scErr := r.stdout.Err()
+	
+	// Read stderr content safely
+	r.stderrMu.Lock()
+	stderrContent := r.stderr.String()
+	r.stderrMu.Unlock()
+
+	if scErr != nil {
+		return fmt.Errorf("scanner error: %v | Stderr: %s", scErr, stderrContent)
+	}
+	return fmt.Errorf("process closed stdout (EOF) | Stderr: %s", stderrContent)
 }
 
 // ProcessTuple sends a tuple to the operator and waits for the response
 func (r *OperatorRunner) ProcessTuple(t Tuple) ([]Tuple, error) {
-    // --- STEP 1: SEND INPUT ---
-    
-    // Protocol:
-    // key: <key>\n
-    // value: <value>\n
-    // Note: We intentionally use Fprintf with explicit \n to match the protocol strictly
-    _, err := fmt.Fprintf(r.stdin, "key: %s\nvalue: %s\n", t.Key, t.Value)
-    if err != nil {
-        return nil, fmt.Errorf("failed to write to op stdin: %v", err)
-    }
+	// --- STEP 1: SANITIZE INPUT ---
+	// Protocol relies on \n. If Key/Value has \n, the Python script reads partial lines and crashes.
+	// Replace internal newlines with spaces.
+	safeKey := strings.ReplaceAll(t.Key, "\n", " ")
+	safeVal := strings.ReplaceAll(t.Value, "\n", " ")
 
-    // --- STEP 2: READ ACTION ---
-    
-    if !r.stdout.Scan() {
-        if err := r.stdout.Err(); err != nil {
-            return nil, fmt.Errorf("error reading op stdout: %v", err)
-        }
-        return nil, fmt.Errorf("operator process closed stdout unexpectedly (EOF)")
-    }
-    
-    // TrimSpace removes any accidental trailing \r or \n from the script output
-    action := strings.TrimSpace(r.stdout.Text())
+	// --- STEP 2: SEND INPUT ---
+	// Format:
+	// key: <key>\n
+	// value: <value>\n
+	_, err := fmt.Fprintf(r.stdin, "key: %s\nvalue: %s\n", safeKey, safeVal)
+	// log.Printf("[OP] [DEBUG] key: %s\nvalue: %s\n", safeKey, safeVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write to op stdin: %v", err)
+	}
 
-    // --- STEP 3: HANDLE ACTION ---
+	// --- STEP 3: READ ACTION ---
+	if !r.stdout.Scan() {
+		return nil, r.scanError()
+	}
 
-    var results []Tuple
+	action := strings.TrimSpace(r.stdout.Text())
 
-    switch action {
-    case "filter":
-        // Logic: Ignore this tuple, return empty list
-        return []Tuple{}, nil
+	// --- STEP 4: HANDLE ACTION ---
+	var results []Tuple
 
-    case "forward":
-        // Logic: Expect exactly two more lines: Key and Value
-        newKey, err := r.readField("key: ")
-        if err != nil {
-            return nil, err
-        }
+	switch action {
+	case "filter":
+		return []Tuple{}, nil
 
-        newValue, err := r.readField("value: ")
-        if err != nil {
-            return nil, err
-        }
+	case "forward":
+		newKey, err := r.readField("key: ")
+		if err != nil {
+			return nil, err
+		}
 
-        results = append(results, Tuple{Key: newKey, Value: newValue})
-        return results, nil
+		newValue, err := r.readField("value: ")
+		if err != nil {
+			return nil, err
+		}
 
-    default:
-        // Robustness: If the user script prints debug info or garbage, we fail here.
-        // Tip: Tell user scripts to print debug info to stderr, not stdout!
-        return nil, fmt.Errorf("unknown protocol action from operator: '%s'", action)
-    }
+		results = append(results, Tuple{
+			ID: t.ID,
+			Key: newKey, 
+			Value: newValue,
+			SourceHost: t.SourceHost,
+			SourceRPCPort: t.SourceRPCPort,
+		})
+		return results, nil
+
+	default:
+		// Debugging help
+		return nil, fmt.Errorf("unknown protocol action: '%s' | Stderr: %s", action, r.stderr.String())
+	}
 }
 
 // Close cleans up the process
 func (r *OperatorRunner) Close() {
-    if r.stdin != nil {
-        r.stdin.Close()
-    }
-    if r.cmd != nil {
-        // Wait allows the process to exit gracefully and cleans up zombie processes
-        r.cmd.Wait()
-    }
+	if r.stdin != nil {
+		r.stdin.Close()
+	}
+	if r.cmd != nil {
+		r.cmd.Wait()
+	}
 }
 
 type Worker struct {
 	TaskName  			string 
 	MyHost string
-    MyPort int
+    MyUDPPort int
+	MyRPCPort int
 
 	Stage     			  int   
 	StageID               int
@@ -190,7 +217,7 @@ type Worker struct {
 func GetWorker(
 	taskName string,
 	hostname string,
-	port int,
+	rpcPort int,
 	udpPort int,
 	opExe string, 
 	opArgs string, 
@@ -200,7 +227,8 @@ func GetWorker(
 	numTasksNextStage int,
 	stage int, stageID int,
 	leaderHost string,
-	leaderPort int) (*Worker, error) {
+	leaderUDPPort int,
+	leaderRPCPort int) (*Worker, error) {
 
 	// Create operator runner
 	runner, err := NewOperatorRunner(opExe, opArgs)
@@ -209,13 +237,18 @@ func GetWorker(
     }
 	flowCounter := flow.NewFlowCounter()
     
-	// TODO: read log and create log
-	
+	fd := detector.GetNewDetector(
+		hostname, udpPort, rpcPort, 
+		stage, stageID, false, 
+		leaderHost, leaderRPCPort, leaderUDPPort, 
+		flowCounter,
+	)
 
 	return &Worker{
 		TaskName: taskName,
 		MyHost: hostname,
-		MyPort: port,
+		MyUDPPort: udpPort,
+		MyRPCPort: rpcPort,
 
 		Stage: stage,
 		StageID: stageID,
@@ -225,7 +258,7 @@ func GetWorker(
 
 		runner: runner,
 		flow: flowCounter,
-		fd: detector.GetNewDetector(hostname, udpPort, stage, stageID, false, leaderHost, leaderPort, flowCounter),
+		fd: fd,
 
 		HydfsFileDest: hydfsFileDest,
 		isLastStage: isLastStage,
@@ -267,7 +300,7 @@ func (w *Worker) RemoteCall(
 func (w *Worker) appendHyDFSFile(filename, content string) error {
 	args := AppendPack{Filename: filename, Data: []byte(content + "\n")}
 	var reply bool
-	return w.RemoteCall("DistributedFiles.AppendBytes", "127.0.0.1", HYDFS_PORT, args, &reply)
+	return w.RemoteCall("DistributedFiles.AppendBytes", "localhost", HYDFS_PORT, args, &reply)
 }
 
 func (w *Worker) sendAck(targetHost string, targetPort int, tupleID string) {
@@ -277,7 +310,11 @@ func (w *Worker) sendAck(targetHost string, targetPort int, tupleID string) {
     // Since upstream retries the Tuple if it doesn't get an ACK, 
     // we can just send this once.
     go func() {
-		w.RemoteCall("Worker.HandleAck", targetHost, targetPort, tupleID, &reply)
+		if w.Stage == 1 {
+			w.RemoteCall("Leader.HandleAck", targetHost, targetPort, tupleID, &reply)
+		} else {
+			w.RemoteCall("Worker.HandleAck", targetHost, targetPort, tupleID, &reply)
+		}
 	}()
 }
 
@@ -297,7 +334,7 @@ func (w *Worker) getTargetHost(key string) (string, int, bool) {
 		i := 0
 		for _, node := range candidates {
 			if targetStageID == i {
-				return node.Hostname, node.Port, true
+				return node.Hostname, node.RPCPort, true
 			}
 			i++
 		}
@@ -306,7 +343,7 @@ func (w *Worker) getTargetHost(key string) (string, int, bool) {
 		targetStageID := int(h.Sum32()) % w.NumTasksNextStage
 		node, ok := candidates[targetStageID]
 		if ok {
-			return node.Hostname, node.Port, true
+			return node.Hostname, node.RPCPort, true
 		}
 	}
 	return "", 0, false
@@ -324,17 +361,24 @@ func (w *Worker) RecoverStateFromHyDFS() error {
 	
 	// first, create empty. If exist, nothing happen
 	reply := new(bool)
-	w.RemoteCall("DistributedFiles.CreateEmpty", w.fd.LeaderHost, w.fd.LeaderPort, logFileName, reply)
+	err := w.RemoteCall("DistributedFiles.CreateEmpty", "localhost", HYDFS_PORT, logFileName, reply)
+	if err == nil {
+		log.Printf("[SM] Replay file %s created, starting worker process...", logFileName)
+		return nil
+	}
 
 	// download file from hydfs
-	tempLogFile := fmt.Sprintf("%s-%d-%d.log.temp", w.TaskName, w.Stage, w.StageID)
+	tempLogFile, err := filepath.Abs(fmt.Sprintf("%s-%d-%d.log.temp", w.TaskName, w.Stage, w.StageID))
+	if err != nil {
+		return fmt.Errorf("fail to create temp file for reply: %s-%d-%d.log.temp", w.TaskName, w.Stage, w.StageID)
+	}
 	args := Args{
 		Command: "get",
 		Filename: logFileName,
 		FileSource: tempLogFile,
 	}	
 	result := new(string)
-	err := w.RemoteCall("Server.CLI", w.fd.LeaderHost, w.fd.LeaderPort, args, result)
+	err = w.RemoteCall("Server.CLI", "localhost", HYDFS_PORT, args, result)
 	if err != nil {
 		return fmt.Errorf("fail to recover from hydfs: %v", err)
 	}
@@ -352,7 +396,8 @@ func (w *Worker) RecoverStateFromHyDFS() error {
 			w.AckedTuple[tupleID] = true // recover from log
 		}
 	}
-	
+	// remove temp file
+	os.Remove(tempLogFile)
 	log.Printf("[SM] Recovered %d processed tuples from log", len(w.ProcessedTuple))
 	return nil
 }
@@ -366,7 +411,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 		// Already processed, treat as success (Idempotent)
 		// Critical: Even if duplicate, we MUST ack. 
         // The sender might be retrying because the previous ack was lost.
-        w.sendAck(t.SourceHost, t.SourcePort, t.ID)
+        w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
 		return nil
 	}
 	w.mu.Unlock()
@@ -382,11 +427,25 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 		// last stage does not need this to send ack back
 		w.ProcessedTuple[t.ID] = t // update processed tuple
 	}
+
+	if len(outputTuples) == 0 { // Filtered, send ack directly
+		// update local state
+		w.mu.Lock()
+		w.AckedTuple[t.ID] = true
+		w.mu.Unlock()
+
+		// log to HyDFS
+		err := w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", t.ID))
+		if err != nil {
+			log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
+		}
+
+		// send ack back
+		w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
+	}
 	
 	if w.isLastStage {
 		for _, outT := range outputTuples {
-			// TODO: notify leader
-			line := fmt.Sprintf("%s: %s", outT.Key, outT.Value)
 			
 			// update local state
 			w.mu.Lock()
@@ -394,18 +453,23 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 			w.mu.Unlock()
 
 			// log to HyDFS
-			w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", t.ID))
-			
-			// write result to HyDFS
-			w.appendHyDFSFile(w.HydfsFileDest, line)
+			err := w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", t.ID))
+			if err != nil {
+				log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
+			}
 			
 			// send ack back
-			w.sendAck(t.SourceHost, t.SourcePort, t.ID)
+			w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
+
+			// notify the leader
+			reply := new(bool)
+			w.RemoteCall("Leader.HandleResult", w.fd.LeaderHost, w.fd.LeaderRPCPort, outT, reply)
+			log.Printf("[SM] Tuple of ID: %s done.", outT.ID)
 		}
 	} else {
 		for _, outT := range outputTuples {
 			outT.SourceHost = w.MyHost
-        	outT.SourcePort = w.MyPort
+        	outT.SourceRPCPort = w.MyRPCPort
 			
 			// If fail to get next node, just ignore it, the tuple would be resent later
 			targetHost, targetPort, ok := w.getTargetHost(outT.Key)
@@ -431,12 +495,15 @@ func (w *Worker) HandleAck(id string, _ *bool) error {
 	w.mu.Unlock()
 	
 	// log to HyDFS
-	w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", id))
+	err := w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", id))
+	if err != nil {
+		log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
+	}
 	
 	// send ack back
 	tuple, ok := w.ProcessedTuple[id]
 	if ok {
-		w.sendAck(tuple.SourceHost, tuple.SourcePort, tuple.ID)
+		w.sendAck(tuple.SourceHost, tuple.SourceRPCPort, tuple.ID)
 	}
 	return nil
 }
@@ -447,7 +514,7 @@ func (w *Worker) StartFD() {
 
 func (w *Worker) RunRPCServer() error {
     rpc.Register(w)
-    listener, err := net.Listen("tcp", fmt.Sprintf(":%d", w.MyPort))
+    listener, err := net.Listen("tcp", fmt.Sprintf(":%d", w.MyRPCPort))
     if err != nil {
         return err
     }
