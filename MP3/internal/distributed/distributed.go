@@ -1278,15 +1278,15 @@ func (d *DistributedFiles) CreateEmpty(filename string, _ *bool) error {
 
 
 type AppendPack struct {
-	filename 	string
-	data        []byte
+	Filename 	string
+	Data        []byte
 }
 
 func (d *DistributedFiles) AppendBytes(info AppendPack, _ *bool) error {
 	
 	quorum := 2
-	data := info.data
-	filename := info.filename
+	data := info.Data
+	filename := info.Filename
 
 	if len(data) == 0 {
 		return fmt.Errorf("nothing to append to %s", filename)
