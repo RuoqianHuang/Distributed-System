@@ -27,15 +27,11 @@ var stateName = map[MemberState]string{
 	Suspected: "Suspected",
 }
 
-type NodeAddr struct {
-	Hostname  string
-	Port      int
-}
-
 type Info struct {
 	Id        uint64      // Id
 	Hostname  string      // hostname
-	Port      int         // port number
+	RPCPort   int         // rpc port number
+	UDPPort   int         // udp port number
 
 	Stage     int         // Stage number, 0 for leader
 	StageID   int         // In stage id, ranging from 0, ...	
@@ -56,7 +52,7 @@ type Membership struct {
 }
 
 func (i *Info) String() string {
-	return fmt.Sprintf("%d (Stage: %d, StageID: %d, Hostname: %s, Port: %d)", i.Id, i.Stage, i.StageID, i.Hostname, i.Port)
+	return fmt.Sprintf("%d (Stage: %d, StageID: %d, Hostname: %s, Port: %d)", i.Id, i.Stage, i.StageID, i.Hostname, i.RPCPort)
 }
 
 // functions for failure detector
@@ -77,7 +73,7 @@ func (m *Membership) Merge(memberInfo map[uint64]Info, currentTime time.Time) bo
 	defer m.lock.Unlock()
 	memberChanged := false
 	for id, info := range memberInfo {
-		if info.Port == 0 || info.Hostname == "" {
+		if info.UDPPort == 0 || info.RPCPort == 0 || info.Hostname == "" {
 			continue
 		}
 		if member, ok := m.InfoMap[id]; ok {
@@ -175,11 +171,11 @@ func (m *Membership) GetTarget() (Info, error) {
 	return targetInfo, nil
 }
 
-func (m *Membership) Exists(hostname string, port int) bool {
+func (m *Membership) Exists(hostname string, udpPort int, rpcPort int) bool {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 	for _, info := range m.InfoMap {
-		if info.Hostname == hostname && info.Port == port {
+		if info.Hostname == hostname && info.UDPPort == udpPort && info.RPCPort == rpcPort {
 			return true
 		}
 	}
@@ -240,17 +236,14 @@ func (m *Membership) RemoveMember(id uint64) {
 	m.updateMember()
 }
 
-func (m *Membership) GetAliveMembersInStage(targetStage int) map[int]NodeAddr {
+func (m *Membership) GetAliveMembersInStage(targetStage int) map[int]Info {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 
-	targets := make(map[int]NodeAddr)
+	targets := make(map[int]Info)
 	for _, info := range m.InfoMap {
 		if info.State == Alive && info.Stage == targetStage {
-			targets[info.StageID] = NodeAddr{
-				Hostname: info.Hostname,
-				Port:     info.Port,
-			}
+			targets[info.StageID] = info
 		}
 	}
 	return targets
@@ -258,7 +251,7 @@ func (m *Membership) GetAliveMembersInStage(targetStage int) map[int]NodeAddr {
 
 func HashInfo(info Info) uint64 {
 	// hash hostname, port, and timestamp to 64 bit integer for map lookup
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s:%d:%d", info.Hostname, info.Port, info.Version.Format(time.RFC3339Nano), info.Stage, info.StageID)))
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s:%d:%d", info.Hostname, info.RPCPort, info.Version.Format(time.RFC3339Nano), info.Stage, info.StageID)))
 	return uint64(binary.BigEndian.Uint64(hash[:8]))
 }
 
@@ -299,28 +292,32 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 	for _, pair := range infoList {
 		sortedId = append(sortedId, pair.Id)
 	}
-	// --------------------------------------------------------------------
-	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
-	// | ID    |  Hostname | Port | Version | Timestamp | Counter | State |
-	// --------------------------------------------------------------------
+	// ---------------------------------------------------------------------------------------
+	// | ID    |  Hostname | RPC Port | Stage | StageID | Timestamp | Counter | Flow | State |
+	// | ID    |  Hostname | RPC Port | Stage | StageID | Timestamp | Counter | Flow | State |
+	// ---------------------------------------------------------------------------------------
 	maxLengths := map[string]int{
-		"Id":        2,
+		"ID":        2,
 		"Hostname":  8,
-		"Port":      4,
-		"Version":   7,
+		"RPC Port":  8,
+		"Stage":     5,
+		"Stage ID":  8,
 		"Timestamp": 9,
 		"Counter":   7,
+		"Flow":      4,
 		"State":     5,
 	}
 	for _, i := range infoList {
 		info := infoMap[i.Id]
 		lengths := map[string]int{
-			"Id":        len(fmt.Sprintf("%d", i.Id)),
+			"ID":        len(fmt.Sprintf("%d", i.Id)),
 			"Hostname":  len(info.Hostname),
-			"Port":      len(fmt.Sprintf("%d", info.Port)),
-			"Version":   len(info.Version.Format(time.RFC3339Nano)),
+			"RPC Port":  len(fmt.Sprintf("%d", info.RPCPort)),
+			"Stage":     len(fmt.Sprintf("%d", info.Stage)),
+			"Stage ID":  len(fmt.Sprintf("%d", info.StageID)),
 			"Timestamp": len(info.Timestamp.Format(time.RFC3339Nano)),
 			"Counter":   len(fmt.Sprintf("%d", info.Counter)),
+			"Flow":      len(fmt.Sprintf("%f", info.Flow)),
 			"State":     len(stateName[info.State]),
 		}
 		for key, value := range lengths {
@@ -329,64 +326,29 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 			}
 		}
 	}
-	totalLength := 22
+	Columns := []string{
+		"ID", "Hostname", "RPC Port", "Stage", "Stage ID", "Timestamp", "Counter", "Flow", "State",
+	}
+	
+	totalLength := 3 * len(Columns) + 1
 	for _, v := range maxLengths {
 		totalLength = totalLength + v
 	}
-
 	res := strings.Repeat("-", totalLength) + "\n"
 
-	// Add column headers
+	// column headers
 	header := "| "
-
-	// ID header
-	s := "ID"
-	if len(s) < maxLengths["Id"] {
-		s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+	for i, col := range Columns {
+		s := col
+		if len(col) < maxLengths[s] {
+			s = s + strings.Repeat(" ", maxLengths[s] - len(s))
+		}
+		if i == len(Columns) - 1 {
+			header = header + s + " |" 
+		} else {
+			header = header + s + " | " 
+		}
 	}
-	header = header + s + " | "
-
-	// Hostname header
-	s = "Hostname"
-	if len(s) < maxLengths["Hostname"] {
-		s = s + strings.Repeat(" ", maxLengths["Hostname"]-len(s))
-	}
-	header = header + s + " | "
-
-	// Port header
-	s = "Port"
-	if len(s) < maxLengths["Port"] {
-		s = s + strings.Repeat(" ", maxLengths["Port"]-len(s))
-	}
-	header = header + s + " | "
-
-	// Version header
-	s = "Version"
-	if len(s) < maxLengths["Version"] {
-		s = s + strings.Repeat(" ", maxLengths["Version"]-len(s))
-	}
-	header = header + s + " | "
-
-	// Timestamp header
-	s = "Timestamp"
-	if len(s) < maxLengths["Timestamp"] {
-		s = s + strings.Repeat(" ", maxLengths["Timestamp"]-len(s))
-	}
-	header = header + s + " | "
-
-	// Counter header
-	s = "Counter"
-	if len(s) < maxLengths["Counter"] {
-		s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
-	}
-	header = header + s + " | "
-
-	// State header
-	s = "State"
-	if len(s) < maxLengths["State"] {
-		s = s + strings.Repeat(" ", maxLengths["State"]-len(s))
-	}
-	header = header + s + " |"
 
 	res = res + header + "\n"
 	res = res + strings.Repeat("-", totalLength) + "\n"
@@ -397,8 +359,8 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 
 		// Id
 		s := fmt.Sprintf("%d", i.Id)
-		if len(s) < maxLengths["Id"] {
-			s = s + strings.Repeat(" ", maxLengths["Id"]-len(s))
+		if len(s) < maxLengths["ID"] {
+			s = s + strings.Repeat(" ", maxLengths["ID"]-len(s))
 		}
 		line = line + s + " | "
 
@@ -409,17 +371,24 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 		}
 		line = line + s + " | "
 
-		// Port
-		s = fmt.Sprintf("%d", info.Port)
-		if len(s) < maxLengths["Port"] {
-			s = s + strings.Repeat(" ", maxLengths["Port"]-len(s))
+		// RPC Port
+		s = fmt.Sprintf("%d", info.RPCPort)
+		if len(s) < maxLengths["RPC Port"] {
+			s = s + strings.Repeat(" ", maxLengths["RPC Port"]-len(s))
 		}
 		line = line + s + " | "
 
-		// Version
-		s = info.Version.Format(time.RFC3339Nano)
-		if len(s) < maxLengths["Version"] {
-			s = s + strings.Repeat(" ", maxLengths["Version"]-len(s))
+		// Stage
+		s = fmt.Sprintf("%d", info.Stage)
+		if len(s) < maxLengths["Stage"] {
+			s = s + strings.Repeat(" ", maxLengths["Stage"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Stage ID
+		s = fmt.Sprintf("%d", info.StageID)
+		if len(s) < maxLengths["Stage ID"] {
+			s = s + strings.Repeat(" ", maxLengths["Stage ID"]-len(s))
 		}
 		line = line + s + " | "
 
@@ -434,6 +403,13 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 		s = fmt.Sprintf("%d", info.Counter)
 		if len(s) < maxLengths["Counter"] {
 			s = s + strings.Repeat(" ", maxLengths["Counter"]-len(s))
+		}
+		line = line + s + " | "
+
+		// Flow
+		s = fmt.Sprintf("%f", info.Flow)
+		if len(s) < maxLengths["Flow"] {
+			s = s + strings.Repeat(" ", maxLengths["Flow"]-len(s))
 		}
 		line = line + s + " | "
 

@@ -11,8 +11,8 @@ import (
 func ParseAndRunWorker() {
 	taskName := flag.String("name", "", "Task Name (e.g., Task-1-0)")
 	hostname := flag.String("host", "", "Worker Hostname or IP")
-	port := flag.Int("port", 8787, "Worker RPC Port")
-	udpPort := flag.Int("udp", 8888, "Worker Failure Detector UDP Port")
+	rpcPort := flag.Int("rpc", 5555, "Worker RPC Port")
+	udpPort := flag.Int("udp", 5556, "Worker Failure Detector UDP Port")
 	
 	opExe := flag.String("op", "", "Operator Executable Name (e.g., grep)")
 	opArgs := flag.String("op_args", "", "Arguments for the Operator")
@@ -27,7 +27,8 @@ func ParseAndRunWorker() {
 	stageID := flag.Int("stage_id", 0, "Task ID within the Stage")
 	
 	leaderHost := flag.String("leader_host", "", "Leader Hostname")
-	leaderPort := flag.Int("leader_port", 1234, "Leader RPC Port")
+	leaderUDPPort := flag.Int("leader_udp", 1234, "Leader UDP Port")
+	leaderRPCPort := flag.Int("leader_rpc", 1235, "Leader RPC Port")
 
 	flag.Parse()
 
@@ -38,13 +39,13 @@ func ParseAndRunWorker() {
 		os.Exit(1)
 	}
 
-	log.Printf("[Main] Starting Worker %s [Stage %d, ID %d] on %s:%d", *taskName, *stage, *stageID, *hostname, *port)
+	log.Printf("[Main] Starting Worker %s [Stage %d, ID %d] on %s:(udp: %d, rpc: %d)", *taskName, *stage, *stageID, *hostname, *udpPort, *rpcPort)
 
 	// Initialize worker
 	worker, err := stream.GetWorker(
 		*taskName,
 		*hostname,
-		*port,
+		*rpcPort,
 		*udpPort,
 		*opExe,
 		*opArgs,
@@ -55,7 +56,8 @@ func ParseAndRunWorker() {
 		*stage,
 		*stageID,
 		*leaderHost,
-		*leaderPort,
+		*leaderUDPPort,
+		*leaderRPCPort,
 	)
 
 	if err != nil {
@@ -65,10 +67,10 @@ func ParseAndRunWorker() {
 	// recover from replay
     if err := worker.RecoverStateFromHyDFS(); err != nil {
         log.Fatalf("[Main] Failed to recover: %v", err)
-    }    
+    }
     
 	// start failure detector
-    go worker.StartFD() 
+    go worker.StartFD()
 
 	// start RPC server
 	log.Printf("[Main] Worker %s is running...", worker.TaskName)

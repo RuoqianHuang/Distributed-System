@@ -31,11 +31,12 @@ type FD struct {
 	State             FDState   
 	IsLeader          bool
 	LeaderHost        string
-	LeaderPort        int
+	LeaderRPCPort     int
+	LeaderUDPPort     int
 	flow              *flow.FlowCounter
 }
 
-func GetNewDetector(hostname string, udpPort int, stage int, stageID int, isLeader bool, leaderHost string, leaderPort int, flow *flow.FlowCounter) *FD {
+func GetNewDetector(hostname string, udpPort int, rpcPort int, stage int, stageID int, isLeader bool, leaderHost string, leaderRPCPort int, leaderUDPPort int, flow *flow.FlowCounter) *FD {
 	Tround := time.Second / 10
 	Tsuspect := Tround * 20
 	Tfail := Tround * 20
@@ -44,17 +45,19 @@ func GetNewDetector(hostname string, udpPort int, stage int, stageID int, isLead
 
 	myInfo := member.Info{
 		Hostname:  hostname,
-		Port:      udpPort,
+		UDPPort:   udpPort,
+		RPCPort:   rpcPort,
 		Stage: stage,
 		StageID: stageID,
 		Version:   currentTime,
 		Timestamp: currentTime,
 		Counter:   0,
+		Flow: 0.0,
 		State:     member.Alive,
 	}
 	myId := member.HashInfo(myInfo)
 	myInfo.Id = myId // Set the Id field to match the computed hash
-	log.Printf("[FD] Starting, ID: %d, Hostname: %s, Port: %d", myId, myInfo.Hostname, myInfo.Port)
+	log.Printf("[FD] Starting, ID: %d, Hostname: %s, RPC Port: %d, UDP Port: %d", myId, myInfo.Hostname, myInfo.RPCPort, myInfo.UDPPort)
 
 	// create membership object
 	membership := &member.Membership{
@@ -75,7 +78,8 @@ func GetNewDetector(hostname string, udpPort int, stage int, stageID int, isLead
 		State: Alive,
 		IsLeader: isLeader,
 		LeaderHost: leaderHost,
-		LeaderPort: leaderPort,
+		LeaderRPCPort: leaderRPCPort,
+		LeaderUDPPort: leaderUDPPort,
 		flow: flow,
 	}
 }
@@ -83,7 +87,7 @@ func GetNewDetector(hostname string, udpPort int, stage int, stageID int, isLead
 func (f *FD) joinGroup() { 
 
 	// Create a UDP listener
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", f.Info.Port))
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", f.Info.UDPPort))
 	if err != nil {
 		log.Fatalf("[FD] UDP ResolveAddr failed: %s", err.Error())
 	}
@@ -101,20 +105,20 @@ func (f *FD) joinGroup() {
 		InfoMap: f.Membership.GetInfoMap(),
 	}
 	// Send message to leader (introducer)
-	_, err = utils.SendMessage(message, f.LeaderHost, f.LeaderPort)
+	_, err = utils.SendMessage(message, f.LeaderHost, f.LeaderUDPPort)
 	if err != nil {
-		log.Printf("[FD] Failed to send probe message to %s:%d: %s", f.LeaderHost, f.LeaderPort, err.Error())
+		log.Printf("[FD] Failed to send probe message to %s:%d: %s", f.LeaderHost, f.LeaderUDPPort, err.Error())
 	}
 
 	// Wait for probe ack
 	buffer := make([]byte, 4096)
 	for {
-		_, _, err := conn.ReadFromUDP(buffer)
+		n, _, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			log.Fatalf("Failed to get probe ack, stopping")
 		}
 
-		message, err := utils.Deserialize(buffer)
+		message, err := utils.Deserialize(buffer[:n])
 		if err != nil {
 			log.Printf("Failed to deserialize mess: %s", err.Error())
 			continue
@@ -154,21 +158,21 @@ func (f *FD) gossipStep() {
 			Type:    utils.Gossip,
 			InfoMap: infoMap,
 		}
-		_, err := utils.SendMessage(message, targetInfo.Hostname, targetInfo.Port)
+		_, err := utils.SendMessage(message, targetInfo.Hostname, targetInfo.UDPPort)
 		if err != nil {
-			log.Printf("[FD] Failed to send gossip message to %s:%d: %s", targetInfo.Hostname, targetInfo.Port, err.Error())
+			log.Printf("[FD] Failed to send gossip message to %s:%d: %s", targetInfo.Hostname, targetInfo.UDPPort, err.Error())
 		}
 	}
 
 	// Check if you can find the leader!!!
-	if !f.Membership.Exists(f.LeaderHost, f.LeaderPort) {
+	if !f.Membership.Exists(f.LeaderHost, f.LeaderUDPPort, f.LeaderRPCPort) {
 		log.Fatalf("[FD] Partitioned from Leader!!!")
 	}
 }
 
 func (f *FD) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
-	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", f.Info.Port))
+	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", f.Info.UDPPort))
 	if err != nil {
 		log.Fatalf("[FD] UDP ResolveAddr failed: %s", err.Error())
 	}
@@ -178,7 +182,7 @@ func (f *FD) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 		log.Fatalf("[FD] UDP listen failed: %s", err.Error())
 	}
 	defer conn.Close()
-	log.Printf("[FD] UDP service listening on port %d", f.Info.Port)
+	log.Printf("[FD] UDP service listening on port %d", f.Info.UDPPort)
 
 	data := make([]byte, 4096)
 	for {
@@ -186,13 +190,13 @@ func (f *FD) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 			break // Stop
 		}
 
-		_, _, err := conn.ReadFromUDP(data)
+		n, _, err := conn.ReadFromUDP(data)
 		if err != nil {
 			log.Printf("[FD] UDP Read error: %s", err.Error())
 			continue
 		}
 
-		message, err := utils.Deserialize(data)
+		message, err := utils.Deserialize(data[:n])
 		if err != nil {
 			log.Printf("[FD] Failed to deserialize message: %s", err.Error())
 		} else {
@@ -203,18 +207,18 @@ func (f *FD) startUDPListenerLoop(waitGroup *sync.WaitGroup) {
 				f.Membership.Merge(message.InfoMap, time.Now())
 			case utils.Probe:
 				// Someone wants to join the group, send some information back
-				log.Printf("[FD] Receive probe message from: %s:%d", message.SenderInfo.Hostname, message.SenderInfo.Port)
+				log.Printf("[FD] Receive probe message from: %s:%d", message.SenderInfo.Hostname, message.SenderInfo.UDPPort)
 				f.Membership.Merge(message.InfoMap, time.Now()) // merge new member			
 				ackMessage := utils.Message{
 					Type:       utils.ProbeAck,
 					SenderInfo: f.Info,
 					InfoMap:    f.Membership.GetInfoMap(),
 				}
-				_, err := utils.SendMessage(ackMessage, message.SenderInfo.Hostname, message.SenderInfo.Port)
+				_, err := utils.SendMessage(ackMessage, message.SenderInfo.Hostname, message.SenderInfo.UDPPort)
 				if err != nil {
 					log.Printf("[FD] Failed to send probe ack message to %s: %s", message.SenderInfo.String(), err.Error())
 				} else {
-					log.Printf("[FD] Welcome, send probe ack message to %s:%d", message.SenderInfo.Hostname, message.SenderInfo.Port)
+					log.Printf("[FD] Welcome, send probe ack message to %s:%d", message.SenderInfo.Hostname, message.SenderInfo.UDPPort)
 				}
 			case utils.Leave:
 				// Handle voluntary leave - remove the sender from membership
@@ -271,7 +275,7 @@ func (f *FD) StopAndLeave() {
 				SenderInfo: infoMap[id],
 				InfoMap:    make(map[uint64]member.Info), // Empty map
 			}
-			utils.SendMessage(leaveMessage, info.Hostname, info.Port)
+			utils.SendMessage(leaveMessage, info.Hostname, info.UDPPort)
 		}
 	}
 
