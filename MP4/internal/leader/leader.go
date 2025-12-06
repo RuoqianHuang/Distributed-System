@@ -3,6 +3,7 @@ package leader
 import (
 	"cs425/mp4/internal/detector"
 	"cs425/mp4/internal/flow"
+	"cs425/mp4/internal/hydfs"
 	"cs425/mp4/internal/member"
 	"cs425/mp4/internal/stream"
 	"cs425/mp4/internal/utils"
@@ -13,15 +14,12 @@ import (
 	"net/rpc"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	CONNECTION_TIMEOUT 			= 1 * time.Second
-	CALL_TIMEOUT       			= 1 * time.Second
 	RAINSTORM_LEADER_PORT_UDP	= 9000
 	RAINSTORM_LEADER_PORT_RPC   = 9001
 	RAINSTORM_WORKER_BASE_PORT	= 6666
@@ -59,6 +57,7 @@ type Leader struct {
 	LowWatermark  int
 	HighWatermark int
 
+	hydfsClient   *hydfs.HYDFS
 	fd            *detector.FD
 	flow          *flow.FlowCounter
 
@@ -104,6 +103,10 @@ func GetNewLeader(
 		VMWorkerCount[host] = 0
 	}
 	
+	hydfsClient, err := hydfs.NewClient()
+	if err != nil {
+		return nil, fmt.Errorf("fail to get hydfs client: %v", err)
+	}
 
 	leader := &Leader{
 		TaskName:         taskName,
@@ -123,42 +126,13 @@ func GetNewLeader(
 		InputRate:        inputRate,
 		LowWatermark:     lowWatermark,
 		HighWatermark:    highWatermark,
+		hydfsClient:      hydfsClient,
 		fd: 			  fd,
 		flow:             flow,
 		vmRRIndex:        0,
 		VMWorkerCount:    VMWorkerCount,
 	}
 	return leader, nil
-}
-
-
-func (l *Leader) RemoteCall(
-	funcName string,
-	hostname string,
-	port int, 
-	args any,
-	reply any) error {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	client := rpc.NewClient(conn)
-	callChan := make(chan error, 1)
-
-	go func() {
-		callChan <- client.Call(funcName, args, reply)
-	}()
-	select {
-	case err = <-callChan:
-		if err != nil {
-			return err
-		}
-	case <-time.After(CALL_TIMEOUT):
-		return fmt.Errorf("%s call to server %s:%d timed out", funcName, hostname, port)
-	}
-	return nil
 }
 
 func (l *Leader) Init() error {
@@ -223,7 +197,7 @@ func (l *Leader) stopWorker(stage int, stageID int) error {
 		
 		// Stop call
 		reply := new(bool)
-		l.RemoteCall("Worker.Stop", info.Hostname, info.RPCPort, false, reply)
+		utils.RemoteCall("Worker.Stop", info.Hostname, info.RPCPort, false, reply)
 	}
 	return nil
 }
@@ -272,21 +246,16 @@ func (l *Leader) startWorker(stage int, stageID int) error {
 	// Unique Name for pkill: taskName-stage-stageID
 	uniqueName := fmt.Sprintf("%s-%d-%d", l.TaskName, stage, stageID)
 	
-	destFile := ""
-	if isLastStage {
-		destFile = l.HydfsFileDest
-	}
-
 	cmdStr := fmt.Sprintf(
 		"nohup %s/worker -name=%s -host=%s -rpc=%d -udp=%d "+
 			"-op=%s -op_args='%s' -stage=%d -stage_id=%d "+
 			"-leader_host=%s -leader_udp=%d -leader_rpc=%d "+
-			"-last=%t -dest=%s -next_scalable=%t -next_tasks=%d "+
+			"-last=%t -next_scalable=%t -next_tasks=%d "+
 			"> %s/worker_%s.log 2>&1 &",
 		WorkDir, uniqueName, workerAddr.Hostname, workerAddr.RPCPort, workerAddr.UDPPort,
 		remoteOp, workerArgs, stage, stageID,
 		l.MyHost, l.MyUDPPort, l.MyRPCPort,
-		isLastStage, destFile, isNextStageScalable, numNextTasks,
+		isLastStage, isNextStageScalable, numNextTasks,
 		WorkDir, uniqueName,
 	)
 
@@ -299,45 +268,14 @@ func (l *Leader) startWorker(stage int, stageID int) error {
 	return nil
 }
 
-type Args struct {
-	Command    string
-	Filename   string
-	FileSource string
-	VMAddress  string
-}
-
-func (l *Leader) appendHyDFSFile(filename, content string) error {
-	args := stream.AppendPack{Filename: filename, Data: []byte(content + "\n")}
-	var reply bool
-	return l.RemoteCall("DistributedFiles.AppendBytes", "localhost", stream.HYDFS_PORT, args, &reply)
-}
-
-func (l *Leader) StartTask() {
+func (l *Leader) DoTask() {
 	
 	// Download the source file
-	tempSourceFile, err := filepath.Abs(fmt.Sprintf("%s.src", l.TaskName))
+	data, err := l.hydfsClient.Get(l.HydfsFileSource)
 	if err != nil {
-		log.Fatalf("[Leader] Failed to get temp file path: %s.src", l.TaskName)
+		l.StopAllWorker()
+		log.Fatalf("[Leader] Failed get the source file: %v, exiting...", err)
 	}
-	args := Args{
-		Command: "get",
-		Filename: l.HydfsFileSource,
-		FileSource: tempSourceFile,
-	}
-	result := new(string)
-	err = l.RemoteCall("Server.CLI", "localhost", stream.HYDFS_PORT, args, result)
-	if err != nil {
-		l.Exit()
-		log.Fatalf("[Leader] Failed to get download the source file, exiting...")
-	}
-	
-	// read file
-	data, err := os.ReadFile(tempSourceFile)
-	if err != nil {
-		l.Exit()
-		log.Fatalf("[Leader] Failed to read the downaloaded source file: %s, exiting...", tempSourceFile)
-	}
-
 	
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
@@ -358,12 +296,12 @@ func (l *Leader) StartTask() {
 		if err != nil {
 			log.Printf("[Leader] Error sending tuple: %v", err)
 		}
+		if l.AutoScale {
+			time.Sleep(time.Second / time.Duration(l.InputRate + 5))
+		}
 	}
 
-	// every 1s, re-send tuples
-	ticker := time.NewTicker(time.Second)
-	
-	for range ticker.C {
+	for {
 		l.muWaitedTuples.RLock()
 		waitedSize := len(l.WaitedTuples)
 		l.muWaitedTuples.RUnlock()
@@ -388,11 +326,15 @@ func (l *Leader) StartTask() {
 			if err != nil {
 				log.Printf("[Leader] Error sending tuple: %v", err)
 			}
+			time.Sleep(time.Millisecond * 300)
 		}
 		l.muWaitedTuples.RUnlock()
+
+		time.Sleep(time.Second)
 	}
-	
-	l.Exit()
+
+	l.StopAllWorker()
+	l.hydfsClient.Close()
 }
 
 func (l *Leader) sendTuple(tuple stream.Tuple) error {
@@ -419,18 +361,17 @@ func (l *Leader) sendTuple(tuple stream.Tuple) error {
 		for _, node := range candidates {
 			if targetStageID == i {
 				reply := new(bool)
-				err := l.RemoteCall("Worker.HandleTuple", node.Hostname, node.RPCPort, tuple, reply)
+				err := utils.RemoteCall("Worker.HandleTuple", node.Hostname, node.RPCPort, tuple, reply)
 				return err
 			}
 			i++
-		}
-	
+		}	
 	} else {
 		targetStageID := int(h.Sum32()) % l.NumTasksStages[0]
 		node, ok := candidates[targetStageID]
 		if ok {
 			reply := new(bool)
-			err := l.RemoteCall("Worker.HandleTuple", node.Hostname, node.RPCPort, tuple, reply)
+			err := utils.RemoteCall("Worker.HandleTuple", node.Hostname, node.RPCPort, tuple, reply)
 			return err
 		}
 	}
@@ -450,7 +391,7 @@ func (l *Leader) HandleResult(t stream.Tuple, _ *bool) error {
 	l.DoneTuples[t.ID] = true
 	
 	// write to hydfs
-	l.appendHyDFSFile(l.HydfsFileDest, fmt.Sprintf("%s: %s", t.Key, t.Value))
+	l.hydfsClient.Append(l.HydfsFileDest, fmt.Sprintf("%s: %s\n", t.Key, t.Value))
 	return nil
 } 
 
@@ -462,7 +403,7 @@ func (l *Leader) HandleAck(id string, _ *bool) error {
 	return nil
 }
 
-func (l *Leader) Exit() {
+func (l *Leader) StopAllWorker() {
 	log.Printf("[Leader] Exiting, stopping all workers...")
 	for i := 1; i <= l.NumStages; i++ {
 		for j := 0; j < l.NumTasksStages[i - 1]; j++ {
@@ -511,4 +452,9 @@ func (l *Leader) ResourceMonitor() {
 			}
 		}
 	}
+}
+
+func (l *Leader) GetMember(_ bool, reply *map[uint64]member.Info) error {
+	*reply = l.fd.Membership.GetInfoMap()
+	return nil
 }

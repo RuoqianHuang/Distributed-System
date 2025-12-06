@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cs425/mp4/internal/member"
 	"encoding/gob"
+	"net/rpc"
+	"time"
 	"fmt"
 	"net"
 	"os"
@@ -96,4 +98,38 @@ func SendMessage(message Message, hostname string, port int) (int64, error) {
 		return 0, fmt.Errorf("error sending data: %s", err.Error())
 	}
 	return int64(numOfBytes), nil
+}
+
+const (
+	CONNECTION_TIMEOUT 			= 2 * time.Second
+	CALL_TIMEOUT       			= 200 * time.Second
+)
+
+func RemoteCall(
+	funcName string,
+	hostname string,
+	port int, 
+	args any,
+	reply any) error {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	client := rpc.NewClient(conn)
+	callChan := make(chan error, 1)
+
+	go func() {
+		callChan <- client.Call(funcName, args, reply)
+	}()
+	select {
+	case err = <-callChan:
+		if err != nil {
+			return err
+		}
+	case <-time.After(CALL_TIMEOUT):
+		return fmt.Errorf("%s call to server %s:%d timed out", funcName, hostname, port)
+	}
+	return nil
 }

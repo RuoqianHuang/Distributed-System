@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"cs425/mp4/internal/detector"
 	"cs425/mp4/internal/flow"
+	"cs425/mp4/internal/hydfs"
+	"cs425/mp4/internal/utils"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -13,16 +15,15 @@ import (
 	"net/rpc"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	CONNECTION_TIMEOUT = 2 * time.Second
-	CALL_TIMEOUT       = 2 * time.Second
-	HYDFS_PORT         = 8788
+	CONNECTION_TIMEOUT = 1 * time.Second
+	CALL_TIMEOUT       = 1 * time.Second
+	
 )
 
 
@@ -35,11 +36,7 @@ type Tuple struct {
 }
 
 
-// HyDFS Append RPC Argument Structure
-type AppendPack struct {
-	Filename 	string
-	Data        []byte
-}
+
 
 // OperatorRunner manages the external task process
 type OperatorRunner struct {
@@ -49,6 +46,7 @@ type OperatorRunner struct {
 	stderr    *bytes.Buffer // Capture error logs from Python
 	stderrMu  sync.Mutex    // Safety for reading stderr while writing
 	exePath   string
+	mu        sync.Mutex
 }
 
 // NewOperatorRunner starts the external process
@@ -125,6 +123,8 @@ func (r *OperatorRunner) scanError() error {
 
 // ProcessTuple sends a tuple to the operator and waits for the response
 func (r *OperatorRunner) ProcessTuple(t Tuple) ([]Tuple, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// --- STEP 1: SANITIZE INPUT ---
 	// Protocol relies on \n. If Key/Value has \n, the Python script reads partial lines and crashes.
 	// Replace internal newlines with spaces.
@@ -203,12 +203,13 @@ type Worker struct {
 	ProcessedTuple 		  map[string]Tuple // Deduplication sets
 	AckedTuple            map[string]bool 
 	
+	hydfsClient           *hydfs.HYDFS
 	runner                *OperatorRunner
 	flow                  *flow.FlowCounter
 	mu                    sync.Mutex
 	fd         		      *detector.FD
 
-	HydfsFileDest         string
+	HydfsLog              string
 	isLastStage           bool
 	isNextStageScalable   bool
 	NumTasksNextStage     int
@@ -222,7 +223,6 @@ func GetWorker(
 	opExe string, 
 	opArgs string, 
 	isLastStage bool,
-	hydfsFileDest string,
 	isNextStageScalable bool,
 	numTasksNextStage int,
 	stage int, stageID int,
@@ -244,6 +244,11 @@ func GetWorker(
 		flowCounter,
 	)
 
+	hydfsClient, err := hydfs.NewClient()
+	if err != nil {
+		return nil, fmt.Errorf("[SM] Fail to get hydfs client: %v", err)
+	}
+
 	return &Worker{
 		TaskName: taskName,
 		MyHost: hostname,
@@ -256,52 +261,18 @@ func GetWorker(
 		ProcessedTuple: make(map[string]Tuple),
 		AckedTuple: make(map[string]bool),
 
+		hydfsClient: hydfsClient,
 		runner: runner,
 		flow: flowCounter,
 		fd: fd,
 
-		HydfsFileDest: hydfsFileDest,
+		HydfsLog: fmt.Sprintf("%s-%d-%d.log", taskName, stage, stageID),
 		isLastStage: isLastStage,
 		isNextStageScalable: isNextStageScalable,
 		NumTasksNextStage: numTasksNextStage,
 	}, nil
 }
 
-func (w *Worker) RemoteCall(
-	funcName string,
-	hostname string,
-	port int,
-	args any,
-	reply any,
-) error {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", hostname, port), CONNECTION_TIMEOUT)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	client := rpc.NewClient(conn)
-	callChan := make(chan error, 1)
-
-	go func() {
-		callChan <- client.Call(funcName, args, reply)
-	}()
-	select {
-	case err = <-callChan:
-		if err != nil {
-			return err
-		}
-	case <-time.After(CALL_TIMEOUT):
-		return fmt.Errorf("%s call to server %s:%d timed out", funcName, hostname, port)
-	}
-	return nil
-}
-
-func (w *Worker) appendHyDFSFile(filename, content string) error {
-	args := AppendPack{Filename: filename, Data: []byte(content + "\n")}
-	var reply bool
-	return w.RemoteCall("DistributedFiles.AppendBytes", "localhost", HYDFS_PORT, args, &reply)
-}
 
 func (w *Worker) sendAck(targetHost string, targetPort int, tupleID string) {
     // We assume the upstream worker exposes a "Worker.HandleAck" RPC
@@ -311,9 +282,9 @@ func (w *Worker) sendAck(targetHost string, targetPort int, tupleID string) {
     // we can just send this once.
     go func() {
 		if w.Stage == 1 {
-			w.RemoteCall("Leader.HandleAck", targetHost, targetPort, tupleID, &reply)
+			utils.RemoteCall("Leader.HandleAck", targetHost, targetPort, tupleID, &reply)
 		} else {
-			w.RemoteCall("Worker.HandleAck", targetHost, targetPort, tupleID, &reply)
+			utils.RemoteCall("Worker.HandleAck", targetHost, targetPort, tupleID, &reply)
 		}
 	}()
 }
@@ -349,42 +320,20 @@ func (w *Worker) getTargetHost(key string) (string, int, bool) {
 	return "", 0, false
 }
 
-type Args struct {
-	Command    string
-	Filename   string
-	FileSource string
-	VMAddress  string
-}
+
 
 func (w *Worker) RecoverStateFromHyDFS() error {
 	logFileName := fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID)
 	
 	// first, create empty. If exist, nothing happen
-	reply := new(bool)
-	err := w.RemoteCall("DistributedFiles.CreateEmpty", "localhost", HYDFS_PORT, logFileName, reply)
+	err := w.hydfsClient.CreateEmpty(logFileName)
 	if err == nil {
 		log.Printf("[SM] Replay file %s created, starting worker process...", logFileName)
 		return nil
 	}
 
 	// download file from hydfs
-	tempLogFile, err := filepath.Abs(fmt.Sprintf("%s-%d-%d.log.temp", w.TaskName, w.Stage, w.StageID))
-	if err != nil {
-		return fmt.Errorf("fail to create temp file for reply: %s-%d-%d.log.temp", w.TaskName, w.Stage, w.StageID)
-	}
-	args := Args{
-		Command: "get",
-		Filename: logFileName,
-		FileSource: tempLogFile,
-	}	
-	result := new(string)
-	err = w.RemoteCall("Server.CLI", "localhost", HYDFS_PORT, args, result)
-	if err != nil {
-		return fmt.Errorf("fail to recover from hydfs: %v", err)
-	}
-	
-	// read file
-	data, err := os.ReadFile(tempLogFile)
+	data, err := w.hydfsClient.Get(logFileName)
 	if err != nil {
 		return fmt.Errorf("fail to recover from hydfs: %v", err)
 	}
@@ -397,7 +346,6 @@ func (w *Worker) RecoverStateFromHyDFS() error {
 		}
 	}
 	// remove temp file
-	os.Remove(tempLogFile)
 	log.Printf("[SM] Recovered %d processed tuples from log", len(w.ProcessedTuple))
 	return nil
 }
@@ -435,7 +383,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 		w.mu.Unlock()
 
 		// log to HyDFS
-		err := w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", t.ID))
+		err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
 		if err != nil {
 			log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
 		}
@@ -453,7 +401,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 			w.mu.Unlock()
 
 			// log to HyDFS
-			err := w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", t.ID))
+			err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
 			if err != nil {
 				log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
 			}
@@ -463,7 +411,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 
 			// notify the leader
 			reply := new(bool)
-			w.RemoteCall("Leader.HandleResult", w.fd.LeaderHost, w.fd.LeaderRPCPort, outT, reply)
+			utils.RemoteCall("Leader.HandleResult", w.fd.LeaderHost, w.fd.LeaderRPCPort, outT, reply)
 			log.Printf("[SM] Tuple of ID: %s done.", outT.ID)
 		}
 	} else {
@@ -476,7 +424,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 			if ok {
 				var ack bool
 				go func() {
-					w.RemoteCall("Worker.HandleTuple", targetHost, targetPort, outT, &ack)
+					utils.RemoteCall("Worker.HandleTuple", targetHost, targetPort, outT, &ack)
 				}()
 			}
 		}
@@ -495,7 +443,7 @@ func (w *Worker) HandleAck(id string, _ *bool) error {
 	w.mu.Unlock()
 	
 	// log to HyDFS
-	err := w.appendHyDFSFile(fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID), fmt.Sprintf("PROCESSED,%s", id))
+	err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", id))
 	if err != nil {
 		log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
 	}
@@ -524,6 +472,7 @@ func (w *Worker) RunRPCServer() error {
 
 func (w *Worker) Stop(_ bool, reply *bool) error {
 	w.fd.StopAndLeave()
+	w.hydfsClient.Close()
 	go func() {
 		// terminates after 1 second
 		time.Sleep(time.Second)
