@@ -157,6 +157,7 @@ func (f *FD) gossipStep() {
 		message := utils.Message{
 			Type:    utils.Gossip,
 			InfoMap: infoMap,
+			SenderInfo: f.Info,
 		}
 		_, err := utils.SendMessage(message, targetInfo.Hostname, targetInfo.UDPPort)
 		if err != nil {
@@ -272,7 +273,7 @@ func (f *FD) StopAndLeave() {
 		if info.State == member.Alive && id != f.Id {
 			leaveMessage := utils.Message{
 				Type:       utils.Leave,
-				SenderInfo: infoMap[id],
+				SenderInfo: f.Info,
 				InfoMap:    make(map[uint64]member.Info), // Empty map
 			}
 			utils.SendMessage(leaveMessage, info.Hostname, info.UDPPort)
