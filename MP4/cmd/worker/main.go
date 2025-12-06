@@ -18,7 +18,6 @@ func ParseAndRunWorker() {
 	opArgs := flag.String("op_args", "", "Arguments for the Operator")
 	
 	isLastStage := flag.Bool("last", false, "Is this the last stage?")
-	hydfsDest := flag.String("dest", "", "HyDFS Destination Filename (only for last stage)")
 	
 	isNextScalable := flag.Bool("next_scalable", false, "Is the next stage scalable?")
 	numNextTasks := flag.Int("next_tasks", 0, "Number of tasks in the next stage")
@@ -50,7 +49,6 @@ func ParseAndRunWorker() {
 		*opExe,
 		*opArgs,
 		*isLastStage,
-		*hydfsDest,
 		*isNextScalable,
 		*numNextTasks,
 		*stage,

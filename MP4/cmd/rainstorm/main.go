@@ -196,5 +196,5 @@ func main() {
 	}
 
 	// Start the task
-	leader.StartTask()
+	leader.DoTask()
 }

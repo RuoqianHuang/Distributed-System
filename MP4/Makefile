@@ -6,6 +6,9 @@ rainstorm: ./cmd/rainstorm/main.go
 worker: ./cmd/worker/main.go
 	go build -o ./bin/worker ./cmd/worker
 
+monitor: ./cmd/monitor/main.go
+	go build -o ./bin/monitor ./cmd/monitor
+
 clean:
 	rm ./bin/rainstorm
 	rm ./bin/worker

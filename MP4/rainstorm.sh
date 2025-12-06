@@ -3,6 +3,7 @@
 
 make worker
 make rainstorm
+make monitor
 
 WORKER_BIN_PATH=./bin/worker
 Nstages=2
