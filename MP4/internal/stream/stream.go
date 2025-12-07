@@ -481,3 +481,12 @@ func (w *Worker) Stop(_ bool, reply *bool) error {
 	}()
 	return nil
 }
+
+func (w *Worker) LogFlowLoop() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		log.Printf("[SM] Current flow %f/s", w.flow.Get())
+	}
+}

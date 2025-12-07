@@ -69,6 +69,7 @@ func ParseAndRunWorker() {
     
 	// start failure detector
     go worker.StartFD()
+	go worker.LogFlowLoop()
 
 	// start RPC server
 	log.Printf("[Main] Worker %s is running...", worker.TaskName)
