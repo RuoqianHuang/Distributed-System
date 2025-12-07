@@ -826,7 +826,7 @@ func (d *DistributedFiles) Append(filename string, fileSource string, quorum int
 
 	log.Printf("[DF] Append: residual=%d, lastBlock=%d, dataLen=%d", residual, lastBlock, len(data))
 
-	if residual != 0 {
+	if residual != 0 || meta.FileSize == 0 {
 		// Calculate how much data to fill into the last block
 		startPos = min(files.BLOCK_SIZE-residual, len(data))
 		log.Printf("[DF] Append: filling last block %d with %d bytes (residual space: %d)", lastBlock, startPos, files.BLOCK_SIZE-residual)
