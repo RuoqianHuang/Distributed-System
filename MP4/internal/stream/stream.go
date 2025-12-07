@@ -323,6 +323,9 @@ func (w *Worker) getTargetHost(key string) (string, int, bool) {
 
 
 func (w *Worker) RecoverStateFromHyDFS() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	logFileName := fmt.Sprintf("%s-%d-%d.log", w.TaskName, w.Stage, w.StageID)
 	
 	// first, create empty. If exist, nothing happen
@@ -352,17 +355,19 @@ func (w *Worker) RecoverStateFromHyDFS() error {
 
 // RPC call for receiving tuple
 func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
+	w.flow.Add(1) // Update metrics
+	
 	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	// 1. Exactly-Once Deduplication
 	if w.AckedTuple[t.ID] {
-		w.mu.Unlock()
 		// Already processed, treat as success (Idempotent)
 		// Critical: Even if duplicate, we MUST ack. 
         // The sender might be retrying because the previous ack was lost.
         w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
 		return nil
 	}
-	w.mu.Unlock()
 
 	// 2. Process via External Operator
 	outputTuples, err := w.runner.ProcessTuple(t)
@@ -378,9 +383,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 
 	if len(outputTuples) == 0 { // Filtered, send ack directly
 		// update local state
-		w.mu.Lock()
 		w.AckedTuple[t.ID] = true
-		w.mu.Unlock()
 
 		// log to HyDFS
 		err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
@@ -396,9 +399,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 		for _, outT := range outputTuples {
 			
 			// update local state
-			w.mu.Lock()
 			w.AckedTuple[t.ID] = true
-			w.mu.Unlock()
 
 			// log to HyDFS
 			err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
@@ -430,8 +431,6 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 		}
 	}
 
-	w.flow.Add(1) // Update metrics
-
 	return nil
 }
 
@@ -449,10 +448,12 @@ func (w *Worker) HandleAck(id string, _ *bool) error {
 	}
 	
 	// send ack back
-	tuple, ok := w.ProcessedTuple[id]
-	if ok {
-		w.sendAck(tuple.SourceHost, tuple.SourceRPCPort, tuple.ID)
-	}
+	go func() {
+		prev := w.fd.Membership.GetAliveMembersInStage(w.Stage - 1)
+		for _, info := range prev {
+			w.sendAck(info.Hostname, info.RPCPort, id)
+		}
+	}()
 	return nil
 }
 

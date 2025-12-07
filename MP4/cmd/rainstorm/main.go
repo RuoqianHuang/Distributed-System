@@ -12,20 +12,20 @@ import (
 
 
 type RainStormConfig struct {
-	NumStages 	    int
-	NumTaskPerStage int
-	Stages          []leader.OpStage
+	NumStages 	    	int
+	NumTaskPerStage 	int
+	Stages          	[]leader.OpStage
 	
-	HydfsFileSource string 
-	HydfsFileDest   string
+	HydfsFileSources 	[]string 
+	HydfsFileDest  		string
 
-	ExactlyOnce     bool
-	AutoScale       bool
-	InputRate       int
-	LowWatermark    int
-	HighWatermark   int
+	ExactlyOnce     	bool
+	AutoScale       	bool
+	InputRate       	int	
+	LowWatermark    	int
+	HighWatermark   	int
 
-	WorkerBinaryPath string
+	WorkerBinaryPath 	string
 }
 
 func ParseRainStormArgs() (*RainStormConfig, error) {
@@ -90,7 +90,7 @@ func ParseRainStormArgs() (*RainStormConfig, error) {
 		}
 
 		// check operator type
-		if stage.Type != "filter" && stage.Type != "transform" && stage.Type != "aggregation" {
+		if stage.Type != "filter" && stage.Type != "transform" && stage.Type != "aggregate" {
 			return nil, fmt.Errorf("unknown operator type: %s", stage.Type)
 		}
 		
@@ -98,12 +98,28 @@ func ParseRainStormArgs() (*RainStormConfig, error) {
 		idx += 3
 	}
 
-	// read source file
+	// read source files
 	if idx >= len(args) {
-		return nil, fmt.Errorf("missing hydfs_src_directory argument")
+		return nil, fmt.Errorf("missing num of hydfs_src argument")
 	}
-	rainstorm.HydfsFileSource = args[idx]
+	m, err := strconv.Atoi(args[idx])
+	if err != nil {
+		return nil, fmt.Errorf("invalid num of src files: %v", err)
+	}
 	idx++
+	
+	if m <= 0 {
+		return nil, fmt.Errorf("invalid num of src file %d", m)
+	}
+	rainstorm.HydfsFileSources = make([]string, m)
+	
+	for i := 0; i < m; i++ {
+		if idx >= len(args) {
+			return nil, fmt.Errorf("missing hydfs_src argument")
+		}
+		rainstorm.HydfsFileSources[i] = args[idx]
+		idx++
+	}
 
 	// Read autoscale enabled
 	if idx >= len(args) {
@@ -165,13 +181,13 @@ func main() {
 	rainstorm, err := ParseRainStormArgs()
 	if err != nil {
 		fmt.Printf("Error parsing arguments: %v\n", err)
-		fmt.Println("Usage: RainStorm <workerBinaryPath> <Nstages> <Ntasks> <op1> <arg1> <type1> ... <src> <auto> [rate lw hw] <dest> <once>")
+		fmt.Println("Usage: RainStorm <workerBinaryPath> <Nstages> <Ntasks> <op1> <arg1> <type1> ... <m_src> <src1> ... <src_m> <auto> [rate lw hw] <dest> <once>")
 		os.Exit(1)
 	}
 
 
 	fmt.Printf("Leader Starting with %d stages...\n", rainstorm.NumStages)
-	fmt.Printf("Source: %s -> Dest: %s\n", rainstorm.HydfsFileSource, rainstorm.HydfsFileDest)
+	fmt.Printf("Source: %v -> Dest: %s\n", rainstorm.HydfsFileSources, rainstorm.HydfsFileDest)
 
 	taskName := fmt.Sprintf("rainstorm-%v", time.Now().Format(time.RFC3339))
 
@@ -182,7 +198,7 @@ func main() {
 	
 	leader, err := leader.GetNewLeader(
 		taskName, rainstorm.WorkerBinaryPath, hostname, leader.RAINSTORM_LEADER_PORT_UDP, leader.RAINSTORM_LEADER_PORT_RPC,
-		rainstorm.NumStages, rainstorm.NumTaskPerStage, rainstorm.Stages, rainstorm.HydfsFileSource,
+		rainstorm.NumStages, rainstorm.NumTaskPerStage, rainstorm.Stages, rainstorm.HydfsFileSources,
 		rainstorm.HydfsFileDest, rainstorm.AutoScale, rainstorm.InputRate, rainstorm.LowWatermark, rainstorm.HighWatermark)
 
 	if err != nil {
@@ -197,4 +213,5 @@ func main() {
 
 	// Start the task
 	leader.DoTask()
+	// leader.StreamTest(30 * time.Second)
 }

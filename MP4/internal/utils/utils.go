@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cs425/mp4/internal/member"
 	"encoding/gob"
+	"math/rand"
 	"net/rpc"
 	"time"
 	"fmt"
@@ -23,6 +24,18 @@ var HOSTS = []string{
 	"fa25-cs425-b608.cs.illinois.edu",
 	"fa25-cs425-b609.cs.illinois.edu",
 	"fa25-cs425-b610.cs.illinois.edu",
+}
+
+// Character for random string generation
+var LETTERS = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func RandStringRunes(n int) string {
+	rng := rand.NewSource(time.Now().UnixNano())
+	arr := make([]rune, n)
+	for i := range arr {
+		arr[i] = LETTERS[rng.Int63() % int64(len(LETTERS))]
+	}
+	return string(arr)
 }
 
 func GetHostName() (string, error) {

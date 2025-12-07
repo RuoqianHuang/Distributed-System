@@ -16,6 +16,7 @@ HOSTS=(
 
 
 REMOTE_PATH="/cs425/mp4/"
+REMOTE_TMP="/tmp/"
 
 
 
@@ -25,7 +26,8 @@ echo "--- Starting cleanup on all 10 hosts ---"
 for HOST in "${HOSTS[@]}"; do
     echo "Attempting to clean: $HOST"
     
-    ssh -T -o ConnectTimeout=5 "$HOST" "rm -rf '$REMOTE_PATH'/worker_rainstorm*"
+    ssh -T -o ConnectTimeout=5 "$HOST" "rm -rf '$REMOTE_PATH'/worker_rainstorm*; rm -rf '$REMOTE_TMP'/rainstorm-hydfs*"
+    
     
     if [ $? -eq 0 ]; then
         echo "✅ Success: $HOST cleaned successfully."

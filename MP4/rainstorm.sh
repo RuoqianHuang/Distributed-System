@@ -9,27 +9,28 @@ WORKER_BIN_PATH=./bin/worker
 Nstages=2
 Ntasks=3
 
-OP1=./rainstorm_ops/identity.py
+OP1=./rainstorm_ops/identity_key_is_line.py
 ARG1="none"
 T1="transform"
 
-OP2=./rainstorm_ops/identity.py
+OP2=./rainstorm_ops/count_line.py
 ARG2="none"
-T2="transform"
+T2="aggregate"
 
-SRC_FILE="rainstorm_test"
+N_SRC_FILE=1
+SRC_FILE1="rainstorm_test"
 
-AUTOSCALE=false
-INPUT_RATE=100
-LW=75
-HW=120
+AUTOSCALE=true
+INPUT_RATE=200
+LW=150
+HW=250
 
-DEST_FILE="rainstorm_result"
-ONCE=true
+DEST_FILE="rainres"
+ONCE=false
 
 ./bin/rainstorm ${WORKER_BIN_PATH} ${Nstages} ${Ntasks} \
     ${OP1} ${ARG1} ${T1} \
     ${OP2} ${ARG2} ${T2} \
-    ${SRC_FILE} \
+    ${N_SRC_FILE} ${SRC_FILE} \
     ${AUTOSCALE} ${INPUT_RATE} ${LW} ${HW} \
     ${DEST_FILE} ${ONCE}

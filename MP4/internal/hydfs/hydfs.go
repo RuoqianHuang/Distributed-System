@@ -45,10 +45,14 @@ func NewClient() (*HYDFS, error) {
 		return nil, err
 	}
 
-	return &HYDFS{
+	hydfs := &HYDFS{
 		buffers: make(map[string]*bufferState),
 		tempDir: tempDir,
-	}, nil
+	}
+
+	// merge
+	hydfs.merge()
+	return hydfs, nil
 }
 
 
@@ -59,7 +63,10 @@ func (h *HYDFS) flush(filename string, buf []byte) error {
 
 	// write to tempfile
 	tempFilePath := filepath.Join(h.tempDir, fmt.Sprintf("rainstorm-append-%s-%s", filename, time.Now().Format(time.RFC3339)))
-	os.WriteFile(tempFilePath, buf, 0644)
+	err := os.WriteFile(tempFilePath, buf, 0644)
+	if err != nil {
+		return fmt.Errorf("error writing to temp file %s: %v", tempFilePath, err)
+	}
 
 	// call server
 	args := Args{
@@ -68,8 +75,18 @@ func (h *HYDFS) flush(filename string, buf []byte) error {
 		FileSource: tempFilePath,
 	}
 	result := new(string)
-	log.Printf("[HYDFS] Flush %d bytes of buffer of %s", len(buf), filename)
-	return utils.RemoteCall("Server.CLI", HYDFS_HOST, HYDFS_PORT, args, result)
+	err = utils.RemoteCall("Server.CLI", HYDFS_HOST, HYDFS_PORT, args, result)
+	if err != nil {
+		return err
+	}
+	log.Printf("[HYDFS] Flush %d bytes of buffer of %s: %s", len(buf), filename, *result)
+	return nil
+}
+
+// Merge 
+func (h *HYDFS) merge() {
+	reply := new(bool)
+	utils.RemoteCall("DistributedFiles.Merge", HYDFS_HOST, HYDFS_PORT, 0, reply)
 }
 
 
