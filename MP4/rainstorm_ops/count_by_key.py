@@ -54,26 +54,14 @@ def main():
         key, val = read_tuple()
         if key is None: break
 
-        # 1. Parse CSV line
-        # Note: Simple split by comma. 
-        columns = val.split(',')
-        
-        # 2. Extract Key (Nth column)
-        group_key = ""
-        if col_idx < len(columns):
-            group_key = columns[col_idx].strip()
-        else:
-            # "Treat missing data as an empty string - a key of its own"
-            group_key = ""
+        # Update Count
+        current_count = counts.get(key, 0) + 1
+        counts[key] = current_count
 
-        # 3. Update Count
-        current_count = counts.get(group_key, 0) + 1
-        counts[group_key] = current_count
-
-        # 4. Emit Running Count
+        # Emit Running Count
         # The key becomes the group (e.g., "Sign Post"), value is the count
         print("forward", flush=True)
-        print(f"key: {group_key}", flush=True)
+        print(f"key: {key}", flush=True)
         print(f"value: {current_count}", flush=True)
 
 if __name__ == "__main__":

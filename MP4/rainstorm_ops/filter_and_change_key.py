@@ -38,7 +38,7 @@ def read_tuple():
     except ValueError:
         return None, None
 
-def parse_csv(line, col_idxs):
+def parse_csv(line, col_idx):
     columns = []
     try: 
         reader = csv.reader([line], skipinitialspace=True)
@@ -49,37 +49,35 @@ def parse_csv(line, col_idxs):
     except csv.Error:
         return None
     
-    ret = []
-    for idx in col_idxs:
-        if idx >= len(columns):
-            ret.append("")
-        else:
-            if "," in columns[idx]:
-                ret.append('"' + columns[idx] + '"')
-            else:
-                ret.append(columns[idx])
-    
-    return ret
-
+    if col_idx < len(columns):
+        return columns[col_idx]
+    return ""
 
 def main():
+    # Get pattern from args. Default to empty string if missing.
+    # The demo instruction says "pattern A/B will be provided"
+    args = sys.argv[1] if len(sys.argv) > 1 else ",0"
+    pattern, col_str = args.split(",")
+    col_idx = 0
+    try:
+        col_idx = int(col_str)
+    except:
+        pass
+
     while True:
         key, val = read_tuple()
         if key is None: break
 
-        subset = parse_csv(val, [0, 1, 2])
+        # Check: Case-sensitive string matching
+        if pattern in val:
 
-        if subset is None:
+            new_key = parse_csv(val, col_idx)
+
+            print("forward", flush=True)
+            print(f"key: {new_key}", flush=True)
+            print(f"value: {val}", flush=True)
+        else:
             print("filter", flush=True)
-            continue
-
-        # Join back into a string
-        new_val = ",".join(subset)
-
-        # 3. Emit
-        print("forward", flush=True)
-        print(f"key: {key}", flush=True)
-        print(f"value: {new_val}", flush=True)
 
 if __name__ == "__main__":
     main()

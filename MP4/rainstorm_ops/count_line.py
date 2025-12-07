@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, csv
+import sys
 
 def read_tuple():
     try:
@@ -38,48 +38,22 @@ def read_tuple():
     except ValueError:
         return None, None
 
-def parse_csv(line, col_idxs):
-    columns = []
-    try: 
-        reader = csv.reader([line], skipinitialspace=True)
-        for row in reader:
-            columns = row
-            break
-    
-    except csv.Error:
-        return None
-    
-    ret = []
-    for idx in col_idxs:
-        if idx >= len(columns):
-            ret.append("")
-        else:
-            if "," in columns[idx]:
-                ret.append('"' + columns[idx] + '"')
-            else:
-                ret.append(columns[idx])
-    
-    return ret
-
-
 def main():
+    # Get column index N. Default to 0 if missing.
+    try:
+        col_idx = int(sys.argv[1])
+    except (IndexError, ValueError):
+        col_idx = 0
+
+    count = 0
     while True:
         key, val = read_tuple()
         if key is None: break
 
-        subset = parse_csv(val, [0, 1, 2])
-
-        if subset is None:
-            print("filter", flush=True)
-            continue
-
-        # Join back into a string
-        new_val = ",".join(subset)
-
-        # 3. Emit
+        count += 1
         print("forward", flush=True)
-        print(f"key: {key}", flush=True)
-        print(f"value: {new_val}", flush=True)
+        print("key: line", flush=True)
+        print(f"value: {count}", flush=True)
 
 if __name__ == "__main__":
     main()
