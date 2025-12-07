@@ -362,6 +362,7 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 
 	// 1. Exactly-Once Deduplication
 	if w.AckedTuple[t.ID] {
+		log.Printf("[SM] Tuple %s (%s: %s) rejected", t.ID, t.Key, t.Value)
 		// Already processed, treat as success (Idempotent)
 		// Critical: Even if duplicate, we MUST ack. 
         // The sender might be retrying because the previous ack was lost.
@@ -400,6 +401,9 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 			
 			// update local state
 			w.AckedTuple[t.ID] = true
+
+			// log result
+			log.Printf("[SM] Tuple %s processed, result: (%s: %s)", outT.ID, outT.Key, outT.Value)
 
 			// log to HyDFS
 			err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
