@@ -357,10 +357,9 @@ func (w *Worker) RecoverStateFromHyDFS() error {
 func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
 	w.flow.Add(1) // Update metrics
 	
-	w.mu.Lock()
-	defer w.mu.Unlock()
 
 	// 1. Exactly-Once Deduplication
+	w.mu.Lock()
 	if w.AckedTuple[t.ID] {
 		log.Printf("[SM] Tuple %s (%s: %s) rejected", t.ID, t.Key, t.Value)
 		// Already processed, treat as success (Idempotent)
@@ -369,71 +368,81 @@ func (w *Worker) HandleTuple(t Tuple, _ *bool) error {
         w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
 		return nil
 	}
+	w.mu.Unlock()
 
-	// 2. Process via External Operator
-	outputTuples, err := w.runner.ProcessTuple(t)
-	if err != nil {
-		// Melformed operator, stop!!
-		log.Fatalf("[SM] Error processing tuple %s: %v", t.ID, err)
-	}
-
-	if !w.isLastStage {
-		// last stage does not need this to send ack back
-		w.ProcessedTuple[t.ID] = t // update processed tuple
-	}
-
-	if len(outputTuples) == 0 { // Filtered, send ack directly
-		// update local state
-		w.AckedTuple[t.ID] = true
-
-		// log to HyDFS
-		err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
+	go func() {
+		// 2. Process via External Operator
+		outputTuples, err := w.runner.ProcessTuple(t)
 		if err != nil {
-			log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
+			// Melformed operator, stop!!
+			log.Fatalf("[SM] Error processing tuple %s: %v", t.ID, err)
 		}
 
-		// send ack back
-		w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
-	}
-	
-	if w.isLastStage {
-		for _, outT := range outputTuples {
+		if !w.isLastStage {
+			// last stage does not need this to send ack back
 			
-			// update local state
-			w.AckedTuple[t.ID] = true
+			w.mu.Lock()
+			w.ProcessedTuple[t.ID] = t // update processed tuple
+			w.mu.Unlock()
+		}
 
-			// log result
-			log.Printf("[SM] Tuple %s processed, result: (%s: %s)", outT.ID, outT.Key, outT.Value)
+		if len(outputTuples) == 0 { // Filtered, send ack directly
+			// update local state
+			w.mu.Lock()
+			w.AckedTuple[t.ID] = true
+			w.mu.Unlock()
 
 			// log to HyDFS
 			err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
 			if err != nil {
 				log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
 			}
-			
+
 			// send ack back
 			w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
-
-			// notify the leader
-			reply := new(bool)
-			utils.RemoteCall("Leader.HandleResult", w.fd.LeaderHost, w.fd.LeaderRPCPort, outT, reply)
-			log.Printf("[SM] Tuple of ID: %s done.", outT.ID)
 		}
-	} else {
-		for _, outT := range outputTuples {
-			outT.SourceHost = w.MyHost
-        	outT.SourceRPCPort = w.MyRPCPort
-			
-			// If fail to get next node, just ignore it, the tuple would be resent later
-			targetHost, targetPort, ok := w.getTargetHost(outT.Key)
-			if ok {
-				var ack bool
-				go func() {
-					utils.RemoteCall("Worker.HandleTuple", targetHost, targetPort, outT, &ack)
-				}()
+		
+		if w.isLastStage {
+			for _, outT := range outputTuples {
+				
+				// update local state
+				w.mu.Lock()
+				w.AckedTuple[t.ID] = true
+				w.mu.Unlock()
+
+				// log result
+				log.Printf("[SM] Tuple %s processed, result: (%s: %s)", outT.ID, outT.Key, outT.Value)
+
+				// log to HyDFS
+				err := w.hydfsClient.Append(w.HydfsLog, fmt.Sprintf("PROCESSED,%s\n", t.ID))
+				if err != nil {
+					log.Fatalf("[SM] Fail to append to HyDFS: %v", err)
+				}
+				
+				// send ack back
+				w.sendAck(t.SourceHost, t.SourceRPCPort, t.ID)
+
+				// notify the leader
+				reply := new(bool)
+				utils.RemoteCall("Leader.HandleResult", w.fd.LeaderHost, w.fd.LeaderRPCPort, outT, reply)
+				log.Printf("[SM] Tuple of ID: %s done.", outT.ID)
+			}
+		} else {
+			for _, outT := range outputTuples {
+				outT.SourceHost = w.MyHost
+				outT.SourceRPCPort = w.MyRPCPort
+				
+				// If fail to get next node, just ignore it, the tuple would be resent later
+				targetHost, targetPort, ok := w.getTargetHost(outT.Key)
+				if ok {
+					var ack bool
+					go func() {
+						utils.RemoteCall("Worker.HandleTuple", targetHost, targetPort, outT, &ack)
+					}()
+				}
 			}
 		}
-	}
+	}()
 
 	return nil
 }
