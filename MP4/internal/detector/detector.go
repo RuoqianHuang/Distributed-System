@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -43,12 +44,14 @@ func GetNewDetector(hostname string, udpPort int, rpcPort int, stage int, stageI
 	Tcleanup := Tround * 100 
 	currentTime := time.Now()
 
+	pid := os.Getpid()
 	myInfo := member.Info{
 		Hostname:  hostname,
 		UDPPort:   udpPort,
 		RPCPort:   rpcPort,
 		Stage: stage,
 		StageID: stageID,
+		Pid: pid,
 		Version:   currentTime,
 		Timestamp: currentTime,
 		Counter:   0,
@@ -57,7 +60,7 @@ func GetNewDetector(hostname string, udpPort int, rpcPort int, stage int, stageI
 	}
 	myId := member.HashInfo(myInfo)
 	myInfo.Id = myId // Set the Id field to match the computed hash
-	log.Printf("[FD] Starting, ID: %d, Hostname: %s, RPC Port: %d, UDP Port: %d", myId, myInfo.Hostname, myInfo.RPCPort, myInfo.UDPPort)
+	log.Printf("[FD] Starting, pid: %d, ID: %d, Hostname: %s, RPC Port: %d, UDP Port: %d", pid, myId, myInfo.Hostname, myInfo.RPCPort, myInfo.UDPPort)
 
 	// create membership object
 	membership := &member.Membership{

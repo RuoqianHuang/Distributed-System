@@ -15,5 +15,5 @@ func main() {
 		log.Fatalf("Fail to get member info: %v", err)
 	}
 	table, _ := member.CreateTable(*reply)
-	log.Printf("%s", table)
+	log.Printf("\n%s", table)
 }
