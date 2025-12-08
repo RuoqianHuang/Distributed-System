@@ -6,7 +6,6 @@ make rainstorm
 make worker
 cd demo
 
-
 WORKER_BIN_PATH=../bin/worker
 RAINSTORM=../bin/rainstorm
 
@@ -14,7 +13,7 @@ Nstages=2
 Ntasks=3
 
 OP1=../rainstorm_ops/filter_and_change_key.py
-ARG1=",3"
+ARG1="Champaign,3"
 T1="filter"
 
 OP2=../rainstorm_ops/count_by_key.py
@@ -22,14 +21,14 @@ ARG2="none"
 T2="aggregate"
 
 N_SRC_FILE=1
-SRC_FILE="dataset1"
+SRC_FILE="dataset_traffic"
 
 AUTOSCALE=false
-INPUT_RATE=100
+INPUT_RATE=1000
 LW=0
-HW=200
+HW=2000
 
-DEST_FILE="application-1"
+DEST_FILE="exp-1"
 ONCE=true
 
 ${RAINSTORM} ${WORKER_BIN_PATH} ${Nstages} ${Ntasks} \

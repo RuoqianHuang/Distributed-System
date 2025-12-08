@@ -35,6 +35,7 @@ type Info struct {
 
 	Stage     int         // Stage number, 0 for leader
 	StageID   int         // In stage id, ranging from 0, ...	
+	Pid       int         // pid
 
 	Version   time.Time   // version timestamp
 	Timestamp time.Time   // local timestamp
@@ -267,7 +268,6 @@ func RandomPermutation(arr *[]uint64) {
 }
 
 func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
-	// TODO: print stage, stageID, flow
 	type Pair struct {
 		Id       uint64
 		Stage    int
@@ -292,13 +292,14 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 	for _, pair := range infoList {
 		sortedId = append(sortedId, pair.Id)
 	}
-	// ---------------------------------------------------------------------------------------
-	// | ID    |  Hostname | RPC Port | Stage | StageID | Timestamp | Counter | Flow | State |
-	// | ID    |  Hostname | RPC Port | Stage | StageID | Timestamp | Counter | Flow | State |
-	// ---------------------------------------------------------------------------------------
+	// ---------------------------------------------------------------------------------------------
+	// | ID    |  Hostname | PID | RPC Port | Stage | StageID | Timestamp | Counter | Flow | State |
+	// | ID    |  Hostname | PID | RPC Port | Stage | StageID | Timestamp | Counter | Flow | State |
+	// ---------------------------------------------------------------------------------------------
 	maxLengths := map[string]int{
 		"ID":        2,
 		"Hostname":  8,
+		"PID":       3,
 		"RPC Port":  8,
 		"Stage":     5,
 		"Stage ID":  8,
@@ -312,6 +313,7 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 		lengths := map[string]int{
 			"ID":        len(fmt.Sprintf("%d", i.Id)),
 			"Hostname":  len(info.Hostname),
+			"PID":       len(fmt.Sprintf("%d", info.Pid)),
 			"RPC Port":  len(fmt.Sprintf("%d", info.RPCPort)),
 			"Stage":     len(fmt.Sprintf("%d", info.Stage)),
 			"Stage ID":  len(fmt.Sprintf("%d", info.StageID)),
@@ -327,7 +329,7 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 		}
 	}
 	Columns := []string{
-		"ID", "Hostname", "RPC Port", "Stage", "Stage ID", "Timestamp", "Counter", "Flow", "State",
+		"ID", "Hostname", "PID", "RPC Port", "Stage", "Stage ID", "Timestamp", "Counter", "Flow", "State",
 	}
 	
 	totalLength := 3 * len(Columns) + 1
@@ -368,6 +370,13 @@ func CreateTable(infoMap map[uint64]Info) (string, []uint64) {
 		s = info.Hostname
 		if len(s) < maxLengths["Hostname"] {
 			s = s + strings.Repeat(" ", maxLengths["Hostname"]-len(s))
+		}
+		line = line + s + " | "
+
+		// PID
+		s = fmt.Sprintf("%d", info.Pid)
+		if len(s) < maxLengths["PID"] {
+			s = s + strings.Repeat(" ", maxLengths["PID"]-len(s))
 		}
 		line = line + s + " | "
 

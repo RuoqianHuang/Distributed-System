@@ -5,6 +5,7 @@ import (
 	"cs425/mp4/internal/flow"
 	"cs425/mp4/internal/hydfs"
 	"cs425/mp4/internal/member"
+	"cs425/mp4/internal/queue"
 	"cs425/mp4/internal/stream"
 	"cs425/mp4/internal/utils"
 	"fmt"
@@ -52,6 +53,7 @@ type Leader struct {
 	muWaitedTuples sync.RWMutex
 	DoneTuples     map[string]bool
 	muDoneTuples   sync.RWMutex
+	resendQueue    *queue.Queue
 
 	AutoScale     bool
 	InputRate     int
@@ -125,10 +127,11 @@ func GetNewLeader(
 		NumTasksPerStage: numTasksPerStage,
 		NumTasksStages:   numTasksStages,
 		Stages:           stages,
-		HydfsFileSources:  hydfsFileSources,
+		HydfsFileSources: hydfsFileSources,
 		HydfsFileDest:    hydfsFileDest,
 		WaitedTuples:     make(map[string]string),
 		DoneTuples:       make(map[string]bool),
+		resendQueue:      queue.NewQueue(),
 		AutoScale:        autoScale,
 		InputRate:        inputRate,
 		LowWatermark:     lowWatermark,
@@ -278,7 +281,7 @@ func (l *Leader) startWorker(stage int, stageID int) error {
 
 func (l *Leader) StreamTest(duration time.Duration) {
 
-	delayTime := max(time.Duration(0), time.Second / time.Duration(l.InputRate) - 3 * time.Millisecond)
+	delayTime := max(time.Duration(0), time.Second/time.Duration(l.InputRate)-3*time.Millisecond)
 
 	startTime := time.Now()
 
@@ -286,42 +289,38 @@ func (l *Leader) StreamTest(duration time.Duration) {
 	for i := 0; time.Since(startTime) < duration; i++ {
 		line := utils.RandStringRunes(256)
 
+		id := fmt.Sprintf("stream_test:%d", i)
 		tuple := stream.Tuple{
-			ID:            fmt.Sprintf("stream_test:%d", i),
-			Key:           fmt.Sprintf("stream_test:%d", i),
+			ID:            id,
+			Key:           id,
 			Value:         line,
 			SourceHost:    l.MyHost,
 			SourceRPCPort: l.MyRPCPort,
 		}
+
 		// update tuple
 		l.muWaitedTuples.Lock()
 		l.WaitedTuples[tuple.ID] = tuple.Value
 		l.muWaitedTuples.Unlock()
+		l.resendQueue.Push(tuple.ID)
 
 		// send tuple
-		err := l.sendTuple(tuple)
-		if err != nil {
-			// log.Printf("[Leader] [DEBUG] Error sending tuple: %v", err)
-		}
+		l.sendTuple(tuple)
 		count++
 
 		time.Sleep(delayTime) // Input rate control
 	}
 	log.Printf("[Leader] done sending all tuples. %d tuples send", count)
 
-	for {
+	for l.resendQueue.Size() > 0 {
+		v := l.resendQueue.Pop()
+		id := v.(string)
+
 		l.muWaitedTuples.RLock()
-		waitedSize := len(l.WaitedTuples)
+		value, ok := l.WaitedTuples[id]
 		l.muWaitedTuples.RUnlock()
 
-		if waitedSize == 0 {
-			// all jobs are done
-			log.Print("[Leader] All tasks are done!!!")
-			break
-		}
-		log.Printf("[Leader] %d tuples not acked, resending", waitedSize)
-		l.muWaitedTuples.RLock()
-		for id, value := range l.WaitedTuples {
+		if ok {
 			tuple := stream.Tuple{
 				ID:            id,
 				Key:           id,
@@ -329,14 +328,10 @@ func (l *Leader) StreamTest(duration time.Duration) {
 				SourceHost:    l.MyHost,
 				SourceRPCPort: l.MyRPCPort,
 			}
-			// log.Printf("[Leader] [DEBUG] tuple %s not done, resend...", id)
-			err := l.sendTuple(tuple)
-			if err != nil {
-				// log.Printf("[Leader] [DEBUG] Error sending tuple: %v", err)
-			}
+			l.sendTuple(tuple)
 			time.Sleep(delayTime) // Input rate control
+			l.resendQueue.Push(id)
 		}
-		l.muWaitedTuples.RUnlock()
 	}
 
 	l.StopMonitor()
@@ -346,56 +341,62 @@ func (l *Leader) StreamTest(duration time.Duration) {
 
 func (l *Leader) DoTask() {
 
-	delayTime := max(time.Duration(0), time.Second / time.Duration(l.InputRate) - 3 * time.Millisecond)
+	delayTime := max(time.Duration(0), time.Second/time.Duration(l.InputRate)-3*time.Millisecond)
+	total_input := 0
 
 	// Download the source file
+	startTime := time.Now()
 	for _, source_file := range l.HydfsFileSources {
 		data, err := l.hydfsClient.Get(source_file)
 		if err != nil {
 			log.Printf("[Leader] Can't download file %s from hydfs: %v", source_file, err)
 			continue
-		}	
+		}
+		log.Printf("[Leader] file %s downloaded from HyDFS", source_file)
 
 		lines := strings.Split(string(data), "\n")
 
 		for i, line := range lines {
+			id := fmt.Sprintf("%s:%d", source_file, i)
 			tuple := stream.Tuple{
-				ID:            fmt.Sprintf("%s:%d", source_file, i),
-				Key:           fmt.Sprintf("%s:%d", source_file, i),
+				ID:            id,
+				Key:           id,
 				Value:         line,
 				SourceHost:    l.MyHost,
 				SourceRPCPort: l.MyRPCPort,
 			}
+
 			// update tuple
 			l.muWaitedTuples.Lock()
 			l.WaitedTuples[tuple.ID] = tuple.Value
 			l.muWaitedTuples.Unlock()
+			l.resendQueue.Push(tuple.ID)
 
 			// send tuple
-			err := l.sendTuple(tuple)
-			if err != nil {
-				// log.Printf("[Leader] [DEBUG] Error sending tuple: %v", err)
-			}
-			
+			total_input += 1
+			l.sendTuple(tuple)
+			// err := l.sendTuple(tuple)
+			// if err != nil {
+			// 	log.Printf("[Leader] [DEBUG] Error sending tuple: %v", err)
+			// } else {
+			// 	log.Printf("[Leader] [DEBUG] tuple %s sent successfully.", tuple.ID)
+			// }
+
 			time.Sleep(delayTime) // Input rate control
 		}
 
 		log.Printf("[Leader] done sending all tuples of file %s. %d tuples send", source_file, len(lines))
-	}	
+	}
 
-	for {
+	for l.resendQueue.Size() > 0 {
+		v := l.resendQueue.Pop()
+		id := v.(string)
+
 		l.muWaitedTuples.RLock()
-		waitedSize := len(l.WaitedTuples)
+		value, ok := l.WaitedTuples[id]
 		l.muWaitedTuples.RUnlock()
 
-		if waitedSize == 0 {
-			// all jobs are done
-			log.Print("[Leader] All tasks are done!!!")
-			break
-		}
-		log.Printf("[Leader] %d tuples not acked, resending", waitedSize)
-		l.muWaitedTuples.RLock()
-		for id, value := range l.WaitedTuples {
+		if ok {
 			tuple := stream.Tuple{
 				ID:            id,
 				Key:           id,
@@ -403,18 +404,25 @@ func (l *Leader) DoTask() {
 				SourceHost:    l.MyHost,
 				SourceRPCPort: l.MyRPCPort,
 			}
-			// log.Printf("[Leader] [DEBUG] tuple %s not done, resend...", id)
-			err := l.sendTuple(tuple)
-			if err != nil {
-				// log.Printf("[Leader] [DEBUG] Error sending tuple: %v", err)
-			}
-			time.Sleep(delayTime) // Input rate control
-		}
-		l.muWaitedTuples.RUnlock()
 
-		time.Sleep(delayTime) // Input rate control
+			l.sendTuple(tuple)
+			// err := l.sendTuple(tuple)
+			// if err != nil {
+			// 	log.Printf("[Leader] [DEBUG] Error resending tuple: %v", err)
+			// } else {
+			// 	log.Printf("[Leader] [DEBUG] tuple %s resent successfully.", tuple.ID)
+			// }
+			time.Sleep(delayTime) // Input rate control
+
+			l.resendQueue.Push(id)
+		}
 	}
-	
+
+	elapseTime := time.Since(startTime)
+	log.Printf("[Leader] %d tuple processed, output %d tuples", total_input, len(l.DoneTuples))
+	log.Printf("[Leader] All tasks finish in %v.", elapseTime)
+	log.Printf("[Leader] Average output throughput %f/s", float64(len(l.DoneTuples))/elapseTime.Seconds())
+
 	// finishing...
 	l.StopMonitor()
 	l.StopAllWorker()
@@ -476,7 +484,7 @@ func (l *Leader) HandleResult(t stream.Tuple, _ *bool) error {
 	if ok {
 		return fmt.Errorf("tuple %s already done", t.ID)
 	}
-	log.Printf("Tuple %s processed: %s: %s", t.ID, t.Key, t.Value)
+	// log.Printf("Tuple %s processed: %s: %s", t.ID, t.Key, t.Value)
 
 	// update done tuples
 	l.DoneTuples[t.ID] = true
@@ -518,17 +526,17 @@ func (l *Leader) StopMonitor() {
 
 func (l *Leader) ResourceMonitor() {
 
-	// pendingWorkers tracks when we started a worker. 
-    // Key: "Stage-StageID", Value: Start Timestamp
-    pendingWorkers := make(map[string]time.Time)
+	// pendingWorkers tracks when we started a worker.
+	// Key: "Stage-StageID", Value: Start Timestamp
+	pendingWorkers := make(map[string]time.Time)
 
 	// lastScaleTime tracks when we last scaled a stage to prevent oscillation
-    // Key: Stage Index, Value: Last Scale Timestamp
-    lastScaleTime := make(map[int]time.Time)
+	// Key: Stage Index, Value: Last Scale Timestamp
+	lastScaleTime := make(map[int]time.Time)
 
 	// Configuration
-    const BootupTimeout = 5 * time.Second  // Give workers 5s to join before restarting
-    const ScaleCooldown = 10 * time.Second  // Don't scale the same stage twice in short time
+	const BootupTimeout = 5 * time.Second  // Give workers 5s to join before restarting
+	const ScaleCooldown = 10 * time.Second // Don't scale the same stage twice in short time
 
 	for {
 		select {
@@ -546,24 +554,23 @@ func (l *Leader) ResourceMonitor() {
 					_, isAlive := stageWorkers[j]
 					workerKey := fmt.Sprintf("%d-%d", i, j)
 
-
 					if isAlive {
 						// Worker is healthy, remove from pending list
-                        delete(pendingWorkers, workerKey)
+						delete(pendingWorkers, workerKey)
 					} else {
 						// Worker is missing. Check if we just started it.
-                        lastStart, isPending := pendingWorkers[workerKey]
+						lastStart, isPending := pendingWorkers[workerKey]
 
 						if isPending && time.Since(lastStart) < BootupTimeout {
-                            // It's still booting up, wait!
-                            continue 
-                        }
+							// It's still booting up, wait!
+							continue
+						}
 
 						log.Printf("[Leader] Worker %d at stage %d is missing/failed. Restarting...", j, i)
 
 						// Restart and mark as pending
-                        l.startWorker(i, j)
-                        pendingWorkers[workerKey] = time.Now()
+						l.startWorker(i, j)
+						pendingWorkers[workerKey] = time.Now()
 					}
 				}
 
@@ -571,9 +578,9 @@ func (l *Leader) ResourceMonitor() {
 				if l.AutoScale && l.Stages[i-1].Type != "aggregate" {
 
 					// Check Cooldown: Don't scale if we just did
-                    if time.Since(lastScaleTime[i]) < ScaleCooldown {
-                        continue
-                    }
+					if time.Since(lastScaleTime[i]) < ScaleCooldown {
+						continue
+					}
 
 					var total_flow float64 = 0.0
 					for _, worker := range stageWorkers {
@@ -586,13 +593,13 @@ func (l *Leader) ResourceMonitor() {
 						log.Printf("[Leader] Low Watermark %f less than %f: Starting new worker %d at stage %d", total_flow, float64(l.LowWatermark), newID, i)
 
 						// Start the worker
-                        l.startWorker(i, newID)
+						l.startWorker(i, newID)
 
 						// CRITICAL: Mark it as pending immediately so Part A doesn't restart it next loop
-                        pendingWorkers[fmt.Sprintf("%d-%d", i, newID)] = time.Now()
+						pendingWorkers[fmt.Sprintf("%d-%d", i, newID)] = time.Now()
 
 						l.NumTasksStages[i-1]++
-                        lastScaleTime[i] = time.Now()
+						lastScaleTime[i] = time.Now()
 					}
 
 					// Scale DOWN
