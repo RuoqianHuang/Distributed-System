@@ -1,8 +1,11 @@
 
 #!/bin/bash
 
-$(cd .. && make rainstorm)
-$(cd .. && make worker)
+cd ..
+make rainstorm
+make worker
+cd demo
+
 
 WORKER_BIN_PATH=../bin/worker
 RAINSTORM=../bin/rainstorm
