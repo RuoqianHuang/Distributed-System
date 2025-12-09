@@ -17,8 +17,6 @@ go build -o bin/rainstorm ./cmd/rainstorm
 # Build the Worker binary (deployed to remote nodes)
 go build -o bin/worker ./cmd/worker
 
-# (Optional) Build all using Makefile if available
-make all
 ```
 
 
@@ -59,7 +57,8 @@ Example: Please refer to scripts in ``./demo``
 
 
 ## System Architecture
-1. Leader (The Coordinator)
+
+### Leader (The Coordinator)
 
 The Leader is the central control plane for the topology.
 
@@ -72,7 +71,7 @@ The Leader is the central control plane for the topology.
 - Failure Recovery: Integrated with the MP2 Failure Detector. If a worker node fails, the Leader detects it and re-spawns the task on a healthy node.
 
 
-2. Worker (The Processing Unit)
+### Worker (The Processing Unit)
 
 Workers execute the actual stream processing logic.
 
@@ -83,7 +82,7 @@ Workers execute the actual stream processing logic.
 - Buffering: Uses a thread-safe Queue with blocking semantics to handle bursty traffic without deadlocking.
 
 
-3. Exactly-Once Semantics (Reliability)
+### Exactly-Once Semantics (Reliability)
 RainStorm guarantees that every tuple is processed exactly once, reflected in the final output.
 
 - Tuple ID: Every tuple is assigned a unique global ID (e.g., src:0, src:0-1).
@@ -97,7 +96,7 @@ RainStorm guarantees that every tuple is processed exactly once, reflected in th
 - Recovery: On restart, a worker reads its specific HyDFS log file to rebuild its AckedTuple state, preventing double-processing.
 
 
-4. Autoscaling
+### Autoscaling
 
 - Metrics: Workers report their flow rate (tuples/sec) to the Leader via the Failure Detector gossip or RPC.
 
@@ -105,7 +104,7 @@ RainStorm guarantees that every tuple is processed exactly once, reflected in th
 
 - Stateful Protection: The Autoscaler explicitly ignores stages marked as aggregate to preserve state consistency.
 
-5. Distributed File System Integration (HyDFS)
+### Distributed File System Integration (HyDFS)
 
 - Input: The Leader downloads the source file from HyDFS, splits it into lines, and streams them as tuples to Stage 1.
 
