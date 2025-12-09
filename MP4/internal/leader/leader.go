@@ -588,9 +588,9 @@ func (l *Leader) ResourceMonitor() {
 					}
 
 					// Scale UP
-					if total_flow < float64(l.LowWatermark) && l.NumTasksStages[i-1] < WORKER_SIZE_LIMIT {
+					if total_flow > float64(l.HighWatermark) && l.NumTasksStages[i-1] < WORKER_SIZE_LIMIT {
 						newID := l.NumTasksStages[i-1]
-						log.Printf("[Leader] Low Watermark %f less than %f: Starting new worker %d at stage %d", total_flow, float64(l.LowWatermark), newID, i)
+						log.Printf("[Leader] High Watermark %f, %f: Starting new worker %d at stage %d", total_flow, float64(l.LowWatermark), newID, i)
 
 						// Start the worker
 						l.startWorker(i, newID)
@@ -603,9 +603,9 @@ func (l *Leader) ResourceMonitor() {
 					}
 
 					// Scale DOWN
-					if total_flow > float64(l.HighWatermark) && l.NumTasksStages[i-1] > 1 {
+					if total_flow < float64(l.LowWatermark) && l.NumTasksStages[i-1] > 1 {
 						removeID := l.NumTasksStages[i-1] - 1
-						log.Printf("[Leader] High Watermark %f higher than %f: Stopping worker %d at stage %d", total_flow, float64(l.HighWatermark), removeID, i)
+						log.Printf("[Leader] Low Watermark %f, %f: Stopping worker %d at stage %d", total_flow, float64(l.HighWatermark), removeID, i)
 
 						l.stopWorker(i, removeID)
 
